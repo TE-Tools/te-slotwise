@@ -95,7 +95,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
         <h2>Wer die Daten sieht</h2>
         <p>E-Mail-Adressen und Namen sind nie öffentlich sichtbar. Anbieter (Verwaltende eines Arbeitsbereichs) sehen Name und E-Mail-Adresse nur von Personen, die bei ihnen gebucht haben oder Mitglied ihres Arbeitsbereichs sind. Andere Buchende sehen keine Personendaten.</p>
         <h2>Dienstleister</h2>
-        <p>Betrieb und Datenbank: Cloudflare, Inc. (Rechenzentren auch außerhalb der EU; Grundlage: EU-Standardvertragsklauseln bzw. Data Privacy Framework). E-Mail-Versand${config.mailMode === 'resend' ? ': Resend (Plus Five Five, Inc.)' : ' über einen beauftragten E-Mail-Dienst'}.</p>
+        <p>Betrieb und Datenbank: Cloudflare, Inc. (Rechenzentren auch außerhalb der EU; Grundlage: EU-Standardvertragsklauseln bzw. Data Privacy Framework). E-Mail-Versand${config.mailMode === 'brevo' ? ': Brevo (Sendinblue SAS, Frankreich)' : config.mailMode === 'emailjs' ? ': EmailJS (EmailJS Ltd.) über Microsoft Outlook' : config.mailMode === 'resend' ? ': Resend (Plus Five Five, Inc.)' : ' über einen beauftragten E-Mail-Dienst'}.</p>
         <h2>Speicherdauer</h2>
         <p>Anmeldelinks verfallen nach 15 Minuten, Sitzungen nach 30 Tagen ohne Nutzung. Protokolle über versendete E-Mails werden nach ${config.retentionNotificationDays} Tagen gelöscht. ${config.retentionBookingDays > 0 ? `Buchungen werden ${config.retentionBookingDays} Tage nach dem Termin gelöscht.` : 'Buchungen bleiben gespeichert, bis das Konto oder der Arbeitsbereich gelöscht wird.'}</p>
         <h2>Deine Rechte</h2>

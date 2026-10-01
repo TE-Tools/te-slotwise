@@ -33,6 +33,8 @@ timer.unref();
 const mailInfo = {
   smtp: 'SMTP eingerichtet',
   resend: 'Resend eingerichtet',
+  emailjs: 'EmailJS eingerichtet',
+  brevo: 'Brevo eingerichtet',
   console: 'nur Konsole (Entwicklung) – es werden keine E-Mails verschickt',
   none: 'NICHT eingerichtet – es werden keine E-Mails verschickt',
 }[config.mailMode];

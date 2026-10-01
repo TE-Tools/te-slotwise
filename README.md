@@ -30,10 +30,12 @@ npm run deploy
 Das wendet neue Datenbank-Migrationen auf die Online-Datenbank `te-slotwise-db` an und lädt die Seite zu Cloudflare Pages (Projekt `te-slotwise`). Einstellungen stehen in `wrangler.toml` unter `[vars]`. Geheimnisse (E-Mail-Schlüssel) werden **nicht** in Dateien gespeichert, sondern so gesetzt:
 
 ```bash
-npx wrangler pages secret put RESEND_API_KEY --project-name te-slotwise
+npx wrangler pages secret put BREVO_API_KEY --project-name te-slotwise
 ```
 
-E-Mail-Versand online: über [Resend](https://resend.com) (kostenloser Tarif reicht für den Anfang). Dafür braucht es ein Resend-Konto, eine dort bestätigte Absender-Domain und `MAIL_FROM` mit dieser Domain. **Ohne Schlüssel ist online keine Anmeldung möglich**, weil Anmeldelinks per E-Mail kommen.
+E-Mail-Versand online: über **Brevo** (kostenlos, 300 Mails/Tag, gemeinsames Konto mit anderen TE-Apps). Absender (`MAIL_FROM`) muss in Brevo unter „Senders“ bestätigt sein. Alternativ: `EMAILJS_*` (EmailJS) oder `RESEND_API_KEY`. **Ohne E-Mail-Versand ist online keine Anmeldung möglich**, weil Anmeldelinks per E-Mail kommen.
+
+Plattform-Admin: Adressen in `ADMIN_EMAILS` (Secret, kommagetrennt) sehen nach der Anmeldung den Menüpunkt „Plattform“ (`/admin`) mit Betriebsübersicht und Test-E-Mail.
 
 Lokal die Cloudflare-Version ausprobieren: `npm run cf:dev` (lokale D1-Datenbank). Rauchtest: `node scripts/smoke.ts http://localhost:8788` – dafür den Dev-Server mit `--binding DEV_LOGIN_LINKS=1 --binding NODE_ENV=development --binding APP_URL=http://localhost:8788` starten.
 
@@ -79,7 +81,10 @@ Umgebungsvariablen des Servers, nie ins Repository.
 | `APP_URL` | Öffentliche Adresse, z. B. `https://termine.example.de`. Bestimmt Links in E-Mails, CSRF-Prüfung und ob Cookies als `Secure` gesetzt werden. |
 | `PORT` | Port des Servers (Standard 3000) |
 | `DATABASE_PATH` | Pfad der SQLite-Datei (Standard `./data/slotwise.db`) |
-| `RESEND_API_KEY` | E-Mail-Versand über Resend (online empfohlen; als Secret setzen) |
+| `BREVO_API_KEY` | E-Mail-Versand über Brevo (online verwendet; als Secret setzen) |
+| `EMAILJS_SERVICE_ID`, `EMAILJS_TEMPLATE_ID`, `EMAILJS_PUBLIC_KEY`, `EMAILJS_PRIVATE_KEY` | Alternative: Versand über EmailJS (Vorlage mit {{subject}}, {{{message_html}}}, {{to_email}}) |
+| `RESEND_API_KEY` | Alternative: Versand über Resend |
+| `ADMIN_EMAILS` | Plattform-Admins (kommagetrennt), Zugang zu /admin |
 | `SMTP_URL` | SMTP-Zugang, z. B. `smtps://benutzer:passwort@smtp.example.com:465`. Ohne diese Variable wird **nichts** versendet. |
 | `MAIL_FROM` | Absender, z. B. `Slotwise <noreply@example.de>` |
 | `MAIL_TRANSPORT=console` | Nur Entwicklung: Mails in der Konsole ausgeben statt senden |

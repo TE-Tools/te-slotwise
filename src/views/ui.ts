@@ -65,6 +65,8 @@ export interface LayoutOpts {
   section?: string;
   workspaces?: { id: string; name: string }[];
   wide?: boolean;
+  /** Plattform-Admin: zeigt den Link zur Plattform-Verwaltung. */
+  isAdmin?: boolean;
 }
 
 function wsNav(ws: NonNullable<LayoutOpts['ws']>, section?: string) {
@@ -121,6 +123,7 @@ export function layout(o: LayoutOpts): H {
         <a href="/dashboard">Übersicht</a>
         <a href="/bookings">Meine Termine</a>
         <a href="/profile">Profil</a>
+        ${o.isAdmin ? html`<a href="/admin">Plattform</a>` : ''}
         <form method="post" action="/logout" class="inline"><button class="linklike" type="submit">Abmelden</button></form>
       </nav>`
     : html`<nav class="topnav" aria-label="Hauptnavigation"><a href="/login">Anmelden</a></nav>`}

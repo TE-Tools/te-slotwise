@@ -1,7 +1,7 @@
 # TE-Slotwise auf Cloudflare Pages (Adresse: https://te-slotwise.pages.dev).
 # Veröffentlichen: npm run deploy (wendet zuerst neue Datenbank-Migrationen an).
-# Geheimnisse NICHT hier eintragen, sondern mit:
-#   npx wrangler pages secret put RESEND_API_KEY --project-name te-slotwise
+# Geheimnisse und persönliche Angaben (BREVO_API_KEY, MAIL_FROM, ADMIN_EMAILS) NICHT hier eintragen, sondern mit:
+#   npx wrangler pages secret put BREVO_API_KEY --project-name te-slotwise
 
 name = "te-slotwise"
 pages_build_output_dir = "public"
@@ -17,7 +17,6 @@ migrations_dir = "migrations"
 [vars]
 NODE_ENV = "production"
 APP_URL = "https://te-slotwise.pages.dev"
-MAIL_FROM = "TE-Slotwise <noreply@example.com>"
 RETENTION_NOTIFICATION_DAYS = "180"
 RETENTION_BOOKING_DAYS = "0"
 # Für Impressum und Datenschutz – bitte ausfüllen. Mehrzeilige Adresse mit | trennen.

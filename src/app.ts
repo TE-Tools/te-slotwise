@@ -9,6 +9,7 @@ import { registerAccountRoutes } from './routes/account.ts';
 import { registerAdminRoutes } from './routes/admin.ts';
 import { registerAuthRoutes } from './routes/auth.ts';
 import { registerBookRoutes } from './routes/book.ts';
+import { registerPlatformRoutes } from './routes/platform.ts';
 import { render } from './routes/common.ts';
 import { SESSION_COOKIE, userForSession } from './services/auth.ts';
 
@@ -55,6 +56,7 @@ export function createApp(getDeps: (c: Context) => Deps, before?: (app: Hono<App
   registerAccountRoutes(app);
   registerBookRoutes(app);
   registerAdminRoutes(app);
+  registerPlatformRoutes(app);
 
   const notFoundPage = (c: Parameters<typeof render>[0]) =>
     render(

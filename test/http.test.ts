@@ -228,3 +228,19 @@ test('Alle Verwaltungs- und Buchungsseiten laden ohne Fehler', async () => {
   const book = await owner.req(`/w/${wsId}/slots/${(await db.get<{ id: string }>(`SELECT id FROM slots WHERE workspace_id = ? AND kind = 'window'`, [wsId]))!.id}/book`, { method: 'POST', form: { time: '16:45', note: '' } });
   assert.match(book.headers.get('location')!, /booked_requested/);
 });
+
+test('Plattform-Verwaltung nur für freigeschaltete Admin-Adressen', async () => {
+  const db = await freshDb();
+  const mailer = new MemoryMailer();
+  const config = loadConfig({ APP_URL: ORIGIN, ADMIN_EMAILS: 'Chef@Example.com' });
+  const app = createApp(() => ({ db, config, mailer, limiter: new RateLimiter(), kick: () => {} }));
+  const other = await login(app, mailer, 'nutzer@example.com');
+  assert.equal((await other.req('/admin')).status, 404);
+  const admin = await login(app, mailer, 'chef@example.com', 'Chef');
+  const page = await admin.req('/admin');
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /Plattform-Verwaltung/);
+  const t = await admin.req('/admin/test-mail', { method: 'POST' });
+  assert.match(t.headers.get('location')!, /test=ok/);
+  assert.equal(mailer.sent.at(-1)!.to, 'chef@example.com');
+});
