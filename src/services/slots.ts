@@ -98,7 +98,7 @@ async function overlaps(db: Db, wsId: string, offeringId: string, startMs: numbe
   return !!row;
 }
 
-async function insertSlot(db: Db, wsId: string, offering: Offering, seriesId: string | null, startMs: number, tz: string, p: SlotInput) {
+export async function insertSlot(db: Db, wsId: string, offering: Offering, seriesId: string | null, startMs: number, tz: string, p: SlotInput) {
   const id = newId();
   const now = nowIso();
   await db.run(
@@ -408,7 +408,7 @@ export interface OccupiedRow {
 export async function occupiedTimes(db: Db, wsId: string, membershipId: string | null, userId: string | null, fromIso: string, toIso: string) {
   return await db.all<OccupiedRow>(
     `SELECT b.starts_at, b.ends_at, s.timezone,
-       CASE WHEN instr(trim(u.display_name), ' ') > 0 THEN substr(trim(u.display_name), 1, instr(trim(u.display_name), ' ') - 1) ELSE trim(u.display_name) END AS first_name,
+       u.first_name AS first_name,
        (b.user_id = @uid) AS mine
      FROM bookings b JOIN slots s ON s.id = b.slot_id AND s.workspace_id = b.workspace_id
      JOIN offerings o ON o.id = s.offering_id AND o.workspace_id = s.workspace_id

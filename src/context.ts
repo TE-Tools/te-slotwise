@@ -5,6 +5,7 @@ import type { Config } from './config.ts';
 import type { Db } from './db.ts';
 import type { Mailer } from './mail/mailer.ts';
 import type { RateLimiter } from './ratelimit.ts';
+import type { PushSender } from './services/push.ts';
 import type { User } from './services/auth.ts';
 import { getWorkspaceForUser, type Workspace } from './services/workspaces.ts';
 
@@ -13,6 +14,8 @@ export interface Deps {
   config: Config;
   mailer: Mailer;
   limiter: RateLimiter;
+  /** Web-Push an die Geräte der Personen. */
+  push: PushSender;
   /** Stößt den Versand ausstehender Benachrichtigungen an (nach Commit). */
   kick: () => void;
 }
@@ -33,7 +36,8 @@ export function requireUser(c: Ctx): User {
     const next = c.req.method === 'GET' ? c.req.path + (new URL(c.req.url).search || '') : '/dashboard';
     throw new HTTPException(302, { res: c.redirect(`/login?next=${encodeURIComponent(next)}`) });
   }
-  if (!user.display_name && c.req.path !== '/profile') {
+  // Vor- und Nachname sind Pflicht (z. B. für Konten aus der Zeit vor der Registrierung mit Namen).
+  if ((!user.first_name || !user.last_name) && c.req.path !== '/profile') {
     throw new HTTPException(302, { res: c.redirect(`/profile?setup=1&next=${encodeURIComponent(c.req.path)}`) });
   }
   return user;

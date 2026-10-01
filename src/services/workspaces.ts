@@ -12,6 +12,9 @@ export interface Workspace {
   public_token: string;
   show_booked_public: BookedDisplay;
   show_booked_members: BookedDisplay;
+  /** Standardpreis in Cent (NULL = nicht festgelegt), siehe services/billing.ts. */
+  default_price_cents: number | null;
+  price_unit: 'lesson' | 'hour';
   created_at: string;
 }
 

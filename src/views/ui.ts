@@ -51,6 +51,19 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   slots_created: { text: 'Slots angelegt.', kind: 'ok' },
   slot_switched: { text: 'Deine Anfrage gilt jetzt für den neuen Termin und wartet auf Bestätigung.', kind: 'ok' },
   confirm_mismatch: { text: 'Die Bestätigung stimmt nicht überein – nichts wurde gelöscht.', kind: 'error' },
+  push_on: { text: 'Push ist eingeschaltet. Mit „Test-Benachrichtigung senden“ kannst du es ausprobieren.', kind: 'ok' },
+  push_test_ok: { text: 'Test-Benachrichtigung gesendet – sie sollte gleich erscheinen.', kind: 'ok' },
+  push_test_failed: { text: 'Die Test-Benachrichtigung konnte keinem Gerät zugestellt werden. Schalte Push auf dem Gerät aus und wieder ein.', kind: 'error' },
+  push_none: { text: 'Auf keinem Gerät ist Push eingeschaltet.', kind: 'info' },
+  push_rate: { text: 'Bitte warte kurz, bevor du erneut testest.', kind: 'error' },
+  push_device_removed: { text: 'Gerät entfernt – es bekommt keine Push-Benachrichtigungen mehr.', kind: 'ok' },
+  name_required: { text: 'Bitte Vor- und Nachnamen angeben.', kind: 'error' },
+  calendar_rotated: { text: 'Neuer Kalender-Link erzeugt. Trage ihn in deinen Kalendern neu ein – der alte funktioniert nicht mehr.', kind: 'ok' },
+  app_revoked: { text: 'Verbindung getrennt.', kind: 'ok' },
+  money_invalid: { text: 'Ungültiger Betrag – bitte z. B. 25 oder 25,50 eingeben. Nichts wurde gespeichert.', kind: 'error' },
+  lessons_saved: { text: 'Gespeichert.', kind: 'ok' },
+  lesson_added: { text: 'Termin eingetragen.', kind: 'ok' },
+  lesson_full: { text: 'Zu dieser Zeit gibt es schon einen festen Termin dieses Angebots. Bitte eine andere Zeit wählen.', kind: 'error' },
 };
 
 export function flash(code: string | undefined, extra?: string): H | '' {
@@ -82,6 +95,7 @@ function wsNav(ws: NonNullable<LayoutOpts['ws']>, section?: string) {
     ['book', 'Termine buchen', can(ws.role, 'book')],
     ['slots', 'Slots', can(ws.role, 'slots.manage')],
     ['bookings', 'Buchungen', can(ws.role, 'bookings.manage')],
+    ['students', 'Schüler', can(ws.role, 'billing.manage')],
     ['offerings', 'Angebote', can(ws.role, 'offerings.manage')],
     ['groups', 'Gruppen', can(ws.role, 'groups.manage')],
     ['members', 'Mitglieder', can(ws.role, 'members.manage')],
@@ -109,6 +123,13 @@ export function layout(o: LayoutOpts): H {
 <title>${o.title} · TE-Slotwise</title>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Slotwise">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -129,10 +150,11 @@ export function layout(o: LayoutOpts): H {
         <a href="/dashboard">Übersicht</a>
         <a href="/bookings">Meine Termine</a>
         <a href="/profile">Profil</a>
+        <button class="linklike" type="button" data-install hidden>App installieren</button>
         ${o.isAdmin ? html`<a href="/admin">Plattform</a>` : ''}
         <form method="post" action="/logout" class="inline"><button class="linklike" type="submit">Abmelden</button></form>
       </nav>`
-    : html`<nav class="topnav" aria-label="Hauptnavigation"><a href="/login">Anmelden</a></nav>`}
+    : html`<nav class="topnav" aria-label="Hauptnavigation"><a href="/login">Anmelden</a> <a href="/register">Registrieren</a></nav>`}
 </header>
 <div class="shell ${o.ws ? 'with-subnav' : ''}">
   ${o.ws ? wsNav(o.ws, o.section) : ''}
@@ -168,10 +190,10 @@ export function when(startIso: string, endIso: string, tz: string, opts: { long?
 }
 
 /** Teilen-Box: Web Share API (falls verfügbar) und immer „Link kopieren“. */
-export function shareBox(url: string, title: string, hint?: string): H {
+export function shareBox(url: string, title: string, hint?: string, label = 'Link zum Teilen'): H {
   const id = `share-${Math.abs(hashCode(url))}`;
   return html`<div class="share">
-    <label for="${id}">Link zum Teilen</label>
+    <label for="${id}">${label}</label>
     <div class="share-row">
       <input id="${id}" type="text" readonly value="${url}" class="share-input">
       <button type="button" class="btn" data-copy="${id}">Link kopieren</button>

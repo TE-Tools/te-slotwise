@@ -12,20 +12,27 @@ import { SmtpMailer } from './mail/smtp.ts';
 import { RateLimiter } from './ratelimit.ts';
 import { runMaintenance } from './services/maintenance.ts';
 import { dispatchPending } from './services/notifications.ts';
+import { WebPushSender } from './services/push.ts';
 
 const config = loadConfig(process.env);
 const db = await openNodeDb(config.databasePath);
 const mailer = createMailer(config, (url, from) => new SmtpMailer(url, from));
-const deps: Deps = { db, config, mailer, limiter: new RateLimiter(), kick: () => void dispatchPending(db, mailer).catch((e) => console.error(e)) };
+const push = new WebPushSender(db, config.vapid.subject, config.vapid);
+const deps: Deps = { db, config, mailer, push, limiter: new RateLimiter(), kick: () => void dispatchPending(db, mailer, { push }).catch((e) => console.error(e)) };
 
 const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const app = createApp(
   () => deps,
-  (a) => a.use('/static/*', serveStatic({ root: relative(process.cwd(), publicDir) || '.' })),
+  (a) => {
+    const root = relative(process.cwd(), publicDir) || '.';
+    a.use('/static/*', serveStatic({ root }));
+    // App-Manifest und Service Worker müssen im Wurzelverzeichnis liegen (Geltungsbereich „/“).
+    for (const f of ['/sw.js', '/manifest.webmanifest', '/offline.html']) a.get(f, serveStatic({ root }));
+  },
 );
 
 // Regelmäßige Aufgaben: Mails nachversenden, Aufbewahrungsfristen.
-const maintain = () => runMaintenance(db, mailer, config).catch((e) => console.error('Wartung:', e));
+const maintain = () => runMaintenance(db, mailer, config, push).catch((e) => console.error('Wartung:', e));
 void maintain();
 const timer = setInterval(maintain, 5 * 60_000);
 timer.unref();

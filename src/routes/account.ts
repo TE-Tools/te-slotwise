@@ -14,11 +14,12 @@ import {
   listWorkspacesForUser,
   pendingInvitationsForEmail,
 } from '../services/workspaces.ts';
-import { COMMON_TIME_ZONES, formatRange, isValidTimeZone, LocalTimeError, localToUtc } from '../time.ts';
+import { COMMON_TIME_ZONES, formatDate, formatRange, isValidTimeZone, LocalTimeError, localToUtc } from '../time.ts';
 import { awaitingLabel, proposalNote } from '../views/booking.ts';
 import { bookingBadge, emptyState, errorBox, flash, maskEmail, options, pageHeader, when, type H } from '../views/ui.ts';
-import { startLogin } from './auth.ts';
 import { back, render } from './common.ts';
+import { listSubscriptions } from '../services/push.ts';
+import { calendarSection } from './calendar.ts';
 
 type Alternative = { id: string; starts_at: string; ends_at: string; timezone: string };
 
@@ -34,6 +35,7 @@ function bookingCard(b: MyBookingRow, now: number, alternatives: Alternative[] =
     </div>
     <p>${when(b.starts_at, b.ends_at, b.timezone, { long: true })}</p>
     ${b.location ? html`<p class="muted">Ort: ${b.location}</p>` : ''}
+    ${active ? html`<p><a href="/bookings/${b.id}/ics" download>📅 In Kalender übernehmen</a></p>` : ''}
     ${b.online_info && b.status === 'confirmed' ? html`<p class="muted">Online: ${b.online_info}</p>` : ''}
     ${b.cancel_requested_at && b.status === 'confirmed' ? html`<p class="flash flash-info">Absage angefragt – die Anbieterseite entscheidet.</p>` : ''}
     ${active ? proposalNote(b, 'booker') : ''}
@@ -86,6 +88,37 @@ async function alternativesFor(db: Deps['db'], userId: string, bookings: MyBooki
   return out;
 }
 
+/** Profilbereich: App installieren und Push-Benachrichtigungen auf diesem Gerät. Die Knöpfe steuert app.js. */
+async function appSection(c: Ctx): Promise<H> {
+  const user = c.get('user')!;
+  const { db, push } = c.get('deps');
+  const devices = await listSubscriptions(db, user.id);
+  const key = await push.publicKey();
+  return html`<section class="card narrow" id="app">
+    <h2>App & Push-Benachrichtigungen</h2>
+    <p>TE-Slotwise lässt sich wie eine App auf dem Startbildschirm installieren. Mit Push bekommst du sofort Bescheid, wenn ein Termin bestätigt, abgesagt oder verschoben wird – und als Anbieter, wenn jemand einen Termin möchte.</p>
+    <div class="install-box" data-install-box>
+      <button class="btn btn-secondary" type="button" data-install hidden>App installieren</button>
+      <p class="hint" data-install-ios hidden>iPhone/iPad: In Safari unten auf <strong>Teilen</strong> tippen und <strong>„Zum Home-Bildschirm“</strong> wählen. Push funktioniert auf dem iPhone erst in der installierten App (ab iOS 16.4).</p>
+      <p class="hint" data-installed hidden>Die App ist auf diesem Gerät installiert.</p>
+    </div>
+    <div class="push-box" data-push data-push-key="${key}">
+      <p data-push-status class="muted">Push-Benachrichtigungen werden geprüft …</p>
+      <noscript><p class="muted">Für Push-Benachrichtigungen wird JavaScript benötigt.</p></noscript>
+      <button class="btn" type="button" data-push-on hidden>Push auf diesem Gerät einschalten</button>
+      <button class="btn btn-secondary" type="button" data-push-off hidden>Push auf diesem Gerät ausschalten</button>
+    </div>
+    ${devices.length
+      ? html`<h3>Geräte mit Push</h3>
+          <ul class="list">${devices.map(
+            (d) => html`<li class="row"><span>${d.label || 'Gerät'} <span class="muted">· seit ${formatDate(Date.parse(d.created_at), 'Europe/Berlin')}</span></span>
+              <form method="post" action="/push/devices/${d.id}/delete" class="inline"><button class="btn btn-small btn-secondary" type="submit">Entfernen</button></form></li>`,
+          )}</ul>
+          <form method="post" action="/push/test"><button class="btn btn-secondary" type="submit">Test-Benachrichtigung senden</button></form>`
+      : ''}
+  </section>`;
+}
+
 export function registerAccountRoutes(app: Hono<AppEnv>) {
   app.get('/', async (c) => {
     if (c.get('user')) return c.redirect('/dashboard');
@@ -94,11 +127,12 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
       body: html`<section class="hero">
         <h1>Termine anbieten, gezielt freigeben, entspannt buchen lassen.</h1>
         <p class="lead">TE-Slotwise hilft Einzelpersonen und Organisationen – Lehrkräften, Schulen, Beratungen, Vereinen –, Zeitfenster anzubieten und Buchungen zu verwalten. Du bestimmst, wer was sieht: öffentlich, für Gruppen, für einzelne Personen oder nur intern.</p>
-        <p><a class="btn btn-large" href="/login">Kostenlos starten</a></p>
+        <p class="actions"><a class="btn btn-large" href="/register">Kostenlos registrieren</a> <a class="btn btn-large btn-secondary" href="/login">Anmelden</a></p>
         <ul class="features">
           <li><strong>Feste Termine oder freie Zeitfenster</strong> – Buchende wählen ihre Wunschzeit.</li>
           <li><strong>Verschieben mit Zustimmung</strong> – fix ist ein Termin erst, wenn beide Seiten zugestimmt haben.</li>
           <li><strong>Privat bleibt privat</strong> – niemand sieht Namen oder Buchungen anderer.</li>
+          <li><strong>Im eigenen Kalender</strong> – Termine als Abo in Google, Apple, Outlook oder im Familienplaner.</li>
         </ul>
       </section>`,
     });
@@ -127,15 +161,15 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
         <h2>Verantwortlich</h2>
         ${operatorBlock(c)}
         <h2>Welche Daten wir verarbeiten</h2>
-        <p>TE-Slotwise speichert nur, was für Terminbuchungen nötig ist: E-Mail-Adresse, Anzeigename, Mitgliedschaften und Gruppenzugehörigkeiten, Buchungen samt Verlauf und Nachrichten sowie den Versandstatus von E-Mail-Benachrichtigungen. Passwörter gibt es nicht; die Anmeldung erfolgt über einmalige Links per E-Mail. Es gibt keine Werbe- oder Analyse-Cookies und keine Inhalte von Drittanbietern. Ein technisch notwendiges Cookie hält die Anmeldung aufrecht.</p>
+        <p>TE-Slotwise speichert nur, was für Terminbuchungen nötig ist: E-Mail-Adresse, Vor- und Nachname, Mitgliedschaften und Gruppenzugehörigkeiten, Buchungen samt Verlauf und Nachrichten, bei Unterrichtsangeboten Anwesenheit, Preise und Zahlungen pro Termin, sowie den Versandstatus von E-Mail-Benachrichtigungen. Die Anmeldung erfolgt mit E-Mail und Passwort; zur Bestätigung der E-Mail-Adresse und bei „Passwort vergessen“ schicken wir einmalige Links. Passwörter werden nur als gesalzener, nicht umkehrbarer Hash (PBKDF2) gespeichert, nie im Klartext. Wenn du deinen Kalender verknüpfst, liefern wir deine Termine über einen geheimen Link bzw. an die App, die du verbindest (z. B. Familienplaner). Es gibt keine Werbe- oder Analyse-Cookies und keine Inhalte von Drittanbietern. Ein technisch notwendiges Cookie hält die Anmeldung aufrecht.</p>
         <h2>Zweck und Rechtsgrundlage</h2>
         <p>Die Daten werden verarbeitet, um Termine anzubieten, zu buchen und darüber zu informieren (Vertragserfüllung bzw. vorvertragliche Maßnahmen, Art. 6 Abs. 1 lit. b DSGVO) sowie zur sicheren Bereitstellung des Dienstes (berechtigtes Interesse, Art. 6 Abs. 1 lit. f DSGVO).</p>
         <h2>Wer die Daten sieht</h2>
         <p>E-Mail-Adressen und Namen sind nie öffentlich sichtbar. Anbieter (Verwaltende eines Arbeitsbereichs) sehen Name und E-Mail-Adresse nur von Personen, die bei ihnen gebucht haben oder Mitglied ihres Arbeitsbereichs sind. Andere Buchende sehen keine Personendaten.</p>
         <h2>Dienstleister</h2>
-        <p>Betrieb und Datenbank: Cloudflare, Inc. (Rechenzentren auch außerhalb der EU; Grundlage: EU-Standardvertragsklauseln bzw. Data Privacy Framework). E-Mail-Versand${config.mailMode === 'brevo' ? ': Brevo (Sendinblue SAS, Frankreich)' : config.mailMode === 'emailjs' ? ': EmailJS (EmailJS Ltd.) über Microsoft Outlook' : config.mailMode === 'resend' ? ': Resend (Plus Five Five, Inc.)' : ' über einen beauftragten E-Mail-Dienst'}.</p>
+        <p>Betrieb und Datenbank: Cloudflare, Inc. (Rechenzentren auch außerhalb der EU; Grundlage: EU-Standardvertragsklauseln bzw. Data Privacy Framework). Push-Benachrichtigungen (nur wenn du sie auf einem Gerät einschaltest): verschlüsselt über den Push-Dienst deines Browsers bzw. Betriebssystems (Google, Apple, Mozilla oder Microsoft); der Dienst sieht nur eine Geräte-Kennung, nicht den Inhalt. E-Mail-Versand${config.mailMode === 'brevo' ? ': Brevo (Sendinblue SAS, Frankreich)' : config.mailMode === 'emailjs' ? ': EmailJS (EmailJS Ltd.) über Microsoft Outlook' : config.mailMode === 'resend' ? ': Resend (Plus Five Five, Inc.)' : ' über einen beauftragten E-Mail-Dienst'}.</p>
         <h2>Speicherdauer</h2>
-        <p>Anmeldelinks verfallen nach 15 Minuten, Sitzungen nach 30 Tagen ohne Nutzung. Protokolle über versendete E-Mails werden nach ${config.retentionNotificationDays} Tagen gelöscht. ${config.retentionBookingDays > 0 ? `Buchungen werden ${config.retentionBookingDays} Tage nach dem Termin gelöscht.` : 'Buchungen bleiben gespeichert, bis das Konto oder der Arbeitsbereich gelöscht wird.'}</p>
+        <p>Bestätigungs- und Passwort-Links verfallen nach 24 Stunden bzw. 15 Minuten, Sitzungen nach 30 Tagen ohne Nutzung. Protokolle über versendete E-Mails werden nach ${config.retentionNotificationDays} Tagen gelöscht. ${config.retentionBookingDays > 0 ? `Buchungen werden ${config.retentionBookingDays} Tage nach dem Termin gelöscht.` : 'Buchungen bleiben gespeichert, bis das Konto oder der Arbeitsbereich gelöscht wird.'}</p>
         <h2>Deine Rechte</h2>
         <p>Du hast das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung, Datenübertragbarkeit und Widerspruch sowie auf Beschwerde bei einer Datenschutz-Aufsichtsbehörde. Im Profil kannst du deine Daten selbst exportieren und dein Konto löschen.</p>
         <p class="muted">Diese Hinweise wurden nicht rechtlich geprüft.</p>
@@ -153,6 +187,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
       .filter((b) => (b.status === 'requested' || b.status === 'confirmed') && Date.parse(b.ends_at) > now)
       .reverse();
     const needsMe = upcoming.filter((b) => awaiting(b) === 'booker');
+    const pushDevices = (await listSubscriptions(db, user.id)).length;
     return render(c, {
       title: 'Übersicht',
       body: [
@@ -161,6 +196,9 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
         needsMe.length
           ? html`<div class="flash flash-action" role="status">${needsMe.length === 1 ? 'Ein Termin wartet' : `${needsMe.length} Termine warten`} auf deine Zustimmung. <a href="/bookings">Ansehen</a></div>`
           : '',
+        pushDevices
+          ? ''
+          : html`<div class="flash flash-info push-hint">Tipp: Installiere TE-Slotwise als App und schalte Push ein – dann erfährst du sofort, wenn ein Termin bestätigt wird oder jemand einen Termin möchte. <a href="/profile#app">Jetzt einrichten</a></div>`,
         invitations.length
           ? html`<section class="card"><h2>Offene Einladungen</h2><ul class="list">
               ${invitations.map(
@@ -230,36 +268,52 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     const user = requireUser(c);
     const setup = c.req.query('setup') === '1';
     const next = safeNextPath(c.req.query('next')) ?? '';
+    // Nach „Passwort vergessen“ (frische Anmeldung per Link) ist das alte Passwort nicht nötig.
+    const needCurrent = !!user.password_hash && !user.recent_link_login;
+    const reset = c.req.query('reset') === '1';
     return render(c, {
       title: 'Profil',
       body: [
         flash(c.req.query('msg')),
+        reset && !setup
+          ? user.recent_link_login
+            ? html`<div class="flash flash-info" role="status">Lege unten jetzt dein neues Passwort fest – das alte brauchst du dafür nicht.</div>`
+            : html`<div class="flash flash-info" role="status">Der Zeitraum zum Zurücksetzen ist abgelaufen. Fordere auf der Anmeldeseite mit „Passwort vergessen?“ einen neuen Link an.</div>`
+          : '',
         html`<section class="card narrow">
-          <h1>${setup ? 'Willkommen! Wie heißt du?' : 'Profil'}</h1>
+          <h1>${setup ? 'Bitte ergänze deinen Namen' : 'Profil'}</h1>
           ${setup ? html`<p class="lead">Dein Name ist nur für Anbieter sichtbar, bei denen du buchst oder Mitglied bist – nie öffentlich.</p>` : ''}
           <form method="post" action="/profile" class="stack">
             <input type="hidden" name="next" value="${next}">
-            <div class="field"><label for="display_name">Anzeigename</label><input id="display_name" name="display_name" required maxlength="80" value="${user.display_name}" autocomplete="name"></div>
+            <div class="grid-form">
+              <label>Vorname <input name="first_name" required maxlength="60" value="${user.first_name}" autocomplete="given-name"></label>
+              <label>Nachname <input name="last_name" required maxlength="60" value="${user.last_name}" autocomplete="family-name"></label>
+            </div>
             <div class="field"><span class="label">E-Mail-Adresse</span><span>${user.email} ${user.email_verified_at ? html`<span class="badge badge-confirmed">bestätigt</span>` : ''}</span></div>
             <fieldset class="field"><legend>E-Mail-Benachrichtigungen</legend>
               <label class="check"><input type="checkbox" name="notify_booking_updates" value="1" ${user.notify_booking_updates ? 'checked' : ''}> Zu meinen eigenen Buchungen (Bestätigung, Absage, Zeitvorschläge)</label>
               <label class="check"><input type="checkbox" name="notify_new_requests" value="1" ${user.notify_new_requests ? 'checked' : ''}> Als Anbieter: neue Anfragen und Änderungswünsche</label>
+              <label class="check"><input type="checkbox" name="notify_email" value="1" ${user.notify_email ? 'checked' : ''}> Per E-Mail (aus = nur Push, solange Push auf einem Gerät eingeschaltet ist)</label>
             </fieldset>
             ${setup && !user.password_hash
               ? html`<div class="field"><label for="new_password">Passwort festlegen (optional, mindestens ${MIN_PASSWORD_LENGTH} Zeichen)</label>
                   <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" maxlength="200">
-                  <span class="hint">Damit meldest du dich künftig direkt mit E-Mail und Passwort an.</span></div>`
+                  <span class="hint">Damit meldest du dich künftig direkt mit E-Mail und Passwort an.</span></div>
+                  <div class="field"><label for="new_password2">Passwort wiederholen</label>
+                  <input id="new_password2" name="new_password2" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" maxlength="200"></div>`
               : ''}
             <button class="btn" type="submit">Speichern</button>
           </form>
         </section>`,
+        setup ? '' : await appSection(c),
+        setup ? '' : await calendarSection(c),
         setup
           ? ''
           : html`<section class="card narrow" id="passwort">
               <h2>Passwort</h2>
-              <p>${user.password_hash ? 'Du kannst dich mit E-Mail und Passwort anmelden.' : 'Noch kein Passwort festgelegt – du meldest dich per E-Mail-Link an.'}</p>
+              <p>${user.password_hash ? 'Du kannst dich mit E-Mail und Passwort anmelden.' : 'Noch kein Passwort festgelegt. Ohne Passwort kannst du dich nach dem Abmelden nicht wieder anmelden – bitte jetzt festlegen.'}</p>
               <form method="post" action="/profile/password" class="stack">
-                ${user.password_hash
+                ${needCurrent
                   ? html`<div class="field"><label for="current_password">Aktuelles Passwort</label><input id="current_password" name="current_password" type="password" autocomplete="current-password" required maxlength="200"></div>`
                   : ''}
                 <div class="field"><label for="pw1">${user.password_hash ? 'Neues Passwort' : 'Passwort'} (mindestens ${MIN_PASSWORD_LENGTH} Zeichen)</label><input id="pw1" name="new_password" type="password" autocomplete="new-password" required minlength="${MIN_PASSWORD_LENGTH}" maxlength="200"></div>
@@ -289,17 +343,22 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     const user = c.get('user');
     if (!user) return c.redirect('/login', 303);
     const f = await readForm(c);
-    const name = str(f, 'display_name', 80);
-    if (!name) return back(c, '/profile?setup=1');
+    const firstName = str(f, 'first_name', 60);
+    const lastName = str(f, 'last_name', 60);
+    if (!firstName || !lastName) return back(c, `/profile?setup=1${str(f, 'next') ? `&next=${encodeURIComponent(str(f, 'next'))}` : ''}`, 'name_required');
     const newPw = typeof f.new_password === 'string' ? f.new_password : '';
     if (newPw && !user.password_hash) {
-      if (passwordProblem(newPw)) return back(c, '/profile?setup=1', 'password_weak');
+      const keep = (msg: string) => back(c, `/profile?setup=1${str(f, 'next') ? `&next=${encodeURIComponent(str(f, 'next'))}` : ''}`, msg);
+      if (passwordProblem(newPw)) return keep('password_weak');
+      if (typeof f.new_password2 === 'string' && f.new_password2 !== newPw) return keep('password_mismatch');
       await setPassword(c.get('deps').db, user.id, newPw, getCookie(c, SESSION_COOKIE));
     }
     await updateProfile(c.get('deps').db, user.id, {
-      displayName: name,
+      firstName,
+      lastName,
       notifyBookingUpdates: bool(f, 'notify_booking_updates'),
       notifyNewRequests: bool(f, 'notify_new_requests'),
+      notifyEmail: bool(f, 'notify_email'),
     });
     const next = safeNextPath(str(f, 'next'));
     return next ? c.redirect(next, 303) : back(c, '/profile', 'saved');
@@ -312,7 +371,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     const pw = typeof f.new_password === 'string' ? f.new_password : '';
     if (pw !== (typeof f.new_password2 === 'string' ? f.new_password2 : '')) return back(c, '/profile#passwort', 'password_mismatch');
     if (passwordProblem(pw)) return back(c, '/profile#passwort', 'password_weak');
-    if (user.password_hash) {
+    if (user.password_hash && !user.recent_link_login) {
       const current = typeof f.current_password === 'string' ? f.current_password : '';
       if (!(await verifyPassword(current.slice(0, 200), user.password_hash))) return back(c, '/profile#passwort', 'password_wrong');
     }
@@ -424,8 +483,9 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
       <p class="muted">Die Einladung gilt für die Adresse ${maskEmail(inv.email)}.</p>`;
     let action: H;
     if (!user) {
-      action = html`<p>Melde dich mit der eingeladenen Adresse an. Hast du noch kein Konto, wird es dabei angelegt.</p>
-        <form method="post" action="${path}/login"><button class="btn" type="submit">Anmeldelink an ${maskEmail(inv.email)} senden</button></form>`;
+      const next = encodeURIComponent(path);
+      action = html`<p>Melde dich mit der eingeladenen Adresse an – oder erstelle mit ihr ein Konto. Danach kommst du hierher zurück.</p>
+        <p class="actions"><a class="btn" href="/login?next=${next}">Anmelden</a> <a class="btn btn-secondary" href="/register?next=${next}">Konto erstellen</a></p>`;
     } else if (user.email.toLowerCase() !== inv.email.toLowerCase()) {
       action = html`<div class="flash flash-error" role="alert">Du bist als ${user.email} angemeldet. Diese Einladung gilt für eine andere Adresse.</div>
         <form method="post" action="/logout"><button class="btn btn-secondary" type="submit">Abmelden und mit der eingeladenen Adresse anmelden</button></form>`;
@@ -433,13 +493,6 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
       action = html`<form method="post" action="${path}"><button class="btn" type="submit">Einladung annehmen</button></form>`;
     }
     return render(c, { title: 'Einladung', body: html`<section class="card narrow">${intro}${action}</section>` });
-  });
-
-  // Anmeldung für die eingeladene Adresse – ohne sie im Klartext anzuzeigen.
-  app.post('/invite/:token/login', async (c) => {
-    const inv = await findInvitationByToken(c.get('deps').db, c.req.param('token'));
-    if (!inv) return c.redirect(`/invite/${encodeURIComponent(c.req.param('token'))}`, 303);
-    return startLogin(c, inv.email, `/invite/${c.req.param('token')}`, maskEmail(inv.email));
   });
 
   app.post('/invite/:token', async (c) => {
