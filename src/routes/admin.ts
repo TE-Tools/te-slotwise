@@ -1122,8 +1122,8 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
   app.get('/w/:wid/notifications', async (c) => {
     const { ws } = await requireWs(c, 'notifications.manage');
     const { db, mailer } = c.get('deps');
-    const rows = await db.all<{ id: string; recipient_email: string; template: Template; status: string; attempts: number; last_error: string | null; created_at: string; retryable: number }>(
-      `SELECT id, recipient_email, template, status, attempts, last_error, created_at, retryable FROM notifications WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 200`,
+    const rows = await db.all<{ id: string; recipient_email: string; channel: string; template: Template; status: string; attempts: number; last_error: string | null; created_at: string; retryable: number }>(
+      `SELECT id, recipient_email, channel, template, status, attempts, last_error, created_at, retryable FROM notifications WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 200`,
       [ws.id],
     );
     const statusLabel: Record<string, string> = { pending: 'Ausstehend', sent: 'Gesendet', failed: 'Fehlgeschlagen', not_configured: 'Nicht gesendet (kein Versand eingerichtet)', logged: 'Nur Konsole (Entwicklung)' };
@@ -1135,10 +1135,10 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         ? html`<div class="table-wrap"><table><thead><tr><th>Zeit</th><th>Art</th><th>Empfänger</th><th>Status</th><th>Fehler</th><th><span class="sr-only">Aktion</span></th></tr></thead><tbody>
             ${rows.map(
               (r) => html`<tr><td>${formatDate(Date.parse(r.created_at), ws.timezone)} ${formatTime(Date.parse(r.created_at), ws.timezone)}</td>
-                <td>${TEMPLATE_LABELS[r.template] ?? r.template}</td><td>${r.recipient_email}</td>
+                <td>${r.channel === 'push' ? html`<span class="badge badge-muted">Push</span> ` : ''}${TEMPLATE_LABELS[r.template] ?? r.template}</td><td>${r.recipient_email}</td>
                 <td><span class="badge badge-n-${r.status}">${statusLabel[r.status] ?? r.status}</span>${r.attempts > 1 ? html` <span class="muted">(${r.attempts} Versuche)</span>` : ''}</td>
                 <td class="muted">${r.last_error ?? ''}</td>
-                <td>${(r.status === 'failed' || r.status === 'not_configured') && r.retryable && mailer.mode !== 'none'
+                <td>${(r.status === 'failed' || r.status === 'not_configured') && r.retryable && r.channel === 'email' && mailer.mode !== 'none'
                   ? html`<form method="post" action="/w/${ws.id}/notifications/${r.id}/retry" class="inline"><button class="btn btn-small btn-secondary" type="submit">Erneut senden</button></form>`
                   : r.status === 'failed' && !r.retryable
                     ? html`<span class="muted">Einladung: über „Mitglieder“ erneut senden</span>`

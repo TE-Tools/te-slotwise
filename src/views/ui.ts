@@ -51,6 +51,12 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   slots_created: { text: 'Slots angelegt.', kind: 'ok' },
   slot_switched: { text: 'Deine Anfrage gilt jetzt für den neuen Termin und wartet auf Bestätigung.', kind: 'ok' },
   confirm_mismatch: { text: 'Die Bestätigung stimmt nicht überein – nichts wurde gelöscht.', kind: 'error' },
+  push_on: { text: 'Push ist eingeschaltet. Mit „Test-Benachrichtigung senden“ kannst du es ausprobieren.', kind: 'ok' },
+  push_test_ok: { text: 'Test-Benachrichtigung gesendet – sie sollte gleich erscheinen.', kind: 'ok' },
+  push_test_failed: { text: 'Die Test-Benachrichtigung konnte keinem Gerät zugestellt werden. Schalte Push auf dem Gerät aus und wieder ein.', kind: 'error' },
+  push_none: { text: 'Auf keinem Gerät ist Push eingeschaltet.', kind: 'info' },
+  push_rate: { text: 'Bitte warte kurz, bevor du erneut testest.', kind: 'error' },
+  push_device_removed: { text: 'Gerät entfernt – es bekommt keine Push-Benachrichtigungen mehr.', kind: 'ok' },
   money_invalid: { text: 'Ungültiger Betrag – bitte z. B. 25 oder 25,50 eingeben. Nichts wurde gespeichert.', kind: 'error' },
   lessons_saved: { text: 'Gespeichert.', kind: 'ok' },
   lesson_added: { text: 'Termin eingetragen.', kind: 'ok' },
@@ -114,6 +120,13 @@ export function layout(o: LayoutOpts): H {
 <title>${o.title} · TE-Slotwise</title>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Slotwise">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -134,6 +147,7 @@ export function layout(o: LayoutOpts): H {
         <a href="/dashboard">Übersicht</a>
         <a href="/bookings">Meine Termine</a>
         <a href="/profile">Profil</a>
+        <button class="linklike" type="button" data-install hidden>App installieren</button>
         ${o.isAdmin ? html`<a href="/admin">Plattform</a>` : ''}
         <form method="post" action="/logout" class="inline"><button class="linklike" type="submit">Abmelden</button></form>
       </nav>`

@@ -1,5 +1,5 @@
 {
   "version": 1,
   "include": ["/*"],
-  "exclude": ["/static/*"]
+  "exclude": ["/static/*", "/sw.js", "/manifest.webmanifest", "/offline.html"]
 }

@@ -41,6 +41,8 @@ export interface Config {
   retentionNotificationDays: number;
   /** Buchungen werden so viele Tage nach Terminende gelöscht (0 = nie). */
   retentionBookingDays: number;
+  /** Web-Push: feste VAPID-Schlüssel (optional, sonst automatisch erzeugt) und Kontakt für Push-Dienste. */
+  vapid: { publicKey?: string; privateKey?: string; subject: string };
 }
 
 export function loadConfig(env: Env): Config {
@@ -83,5 +85,10 @@ export function loadConfig(env: Env): Config {
     },
     retentionNotificationDays: Number(env.RETENTION_NOTIFICATION_DAYS || 180),
     retentionBookingDays: Number(env.RETENTION_BOOKING_DAYS || 0),
+    vapid: {
+      publicKey: env.VAPID_PUBLIC_KEY?.trim() || undefined,
+      privateKey: env.VAPID_PRIVATE_KEY?.trim() || undefined,
+      subject: env.VAPID_SUBJECT?.trim() || (env.OPERATOR_EMAIL?.trim() ? `mailto:${env.OPERATOR_EMAIL.trim()}` : appUrl),
+    },
   };
 }

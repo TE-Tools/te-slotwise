@@ -13,6 +13,7 @@
 | Mitgliedschaften, Rollen, Gruppen | Berechtigungen | die Person sieht nur eigene Gruppen; Verwaltende sehen alle im eigenen Bereich |
 | Buchungen, Nachrichten, Verlauf | Terminverwaltung | die Person selbst und Verwaltende des Bereichs |
 | Anwesenheit, Preis und bezahlter Betrag pro Termin, individueller Preis | Abrechnung des Unterrichts (Schülerübersicht) | Eigentümer:innen und Administrator:innen des Bereichs; die Person selbst über den Datenexport |
+| Push-Abo pro Gerät (Adresse beim Push-Dienst, Schlüssel, grobe Gerätebezeichnung wie „Android · Chrome“) | Push-Benachrichtigungen, nur nach ausdrücklichem Einschalten | die Person selbst (Profil → Geräte); löschbar dort oder durch Ausschalten |
 | Passwort (nur falls festgelegt) | Anmeldung | niemand – gespeichert nur als gesalzener PBKDF2-Hash |
 | Benachrichtigungsprotokoll (Empfänger, Art, Status, Fehler) | Nachvollziehbarkeit des Versands | Verwaltende des Bereichs |
 | Sitzungen, Anmeldelinks | Anmeldung | niemand (nur Hashes) |
@@ -43,7 +44,7 @@ Anzeige mit Vornamen sollte nur mit Einverständnis der Buchenden gewählt werde
 1. Betreiberangaben (`OPERATOR_*`) eintragen; `/impressum` und `/datenschutz` werden daraus erzeugt. Die Texte sind nicht rechtlich geprüft.
 2. Verhältnis Plattformbetreiber ↔ Arbeitsbereich-Inhaber (vermutlich Auftragsverarbeitung) – rechtlich klären.
 3. Speicherfrist für Buchungen festlegen (`RETENTION_BOOKING_DAYS`, derzeit 0 = unbegrenzt).
-4. E-Mail-Anbieter (vorgesehen: Resend) und Hosting (Cloudflare): Auftragsverarbeitungsverträge abschließen.
+4. E-Mail-Anbieter (Brevo) und Hosting (Cloudflare): Auftragsverarbeitungsverträge abschließen. Push läuft Ende-zu-Ende-verschlüsselt über die Push-Dienste der Browser (Google FCM, Apple, Mozilla, Microsoft); diese sehen keine Inhalte.
 5. Ob Arbeitsbereiche Daten ihrer Mitglieder exportieren dürfen/sollen.
 6. Hosting-Standort und Backup-Konzept (Verschlüsselung, Aufbewahrung der Sicherungen).
 7. Einwilligungen bei Minderjährigen (relevant für Musikunterricht).

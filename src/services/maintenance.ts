@@ -4,13 +4,14 @@ import { nowIso } from '../ids.ts';
 import type { Mailer } from '../mail/mailer.ts';
 import { purgeExpired } from './auth.ts';
 import { dispatchPending } from './notifications.ts';
+import type { PushSender } from './push.ts';
 
 /**
  * Regelmäßige Aufgaben (Node: Takt in server.ts, Cloudflare: Cron-Trigger in worker.ts):
  * ausstehende/fehlgeschlagene Mails versenden und Daten nach den Aufbewahrungsfristen löschen.
  */
-export async function runMaintenance(db: Db, mailer: Mailer, config: Config, now = Date.now()) {
-  await dispatchPending(db, mailer, { includeFailed: true });
+export async function runMaintenance(db: Db, mailer: Mailer, config: Config, push?: PushSender, now = Date.now()) {
+  await dispatchPending(db, mailer, { includeFailed: true, push });
   await purgeExpired(db, now);
   if (config.retentionNotificationDays > 0) {
     await db.run(`DELETE FROM notifications WHERE created_at < ? AND status <> 'pending'`, [nowIso(now - config.retentionNotificationDays * 86_400_000)]);

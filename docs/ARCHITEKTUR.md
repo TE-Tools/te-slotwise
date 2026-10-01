@@ -19,10 +19,12 @@ Enthalten:
 - Impressum und Datenschutzseite aus Betreiberangaben, automatische Löschfristen
 - E-Mail-Benachrichtigungen mit Versandprotokoll und erneutem Versand
 - Teilen per Web Share API und „Link kopieren“
+- **Installierbare App (PWA)**: Manifest, Service Worker (`public/sw.js`, nur Gestaltung und Offline-Seite werden zwischengespeichert – keine persönlichen Seiten), App-Symbole; „App installieren“ in Chrome/Edge/Android, auf dem iPhone über „Zum Home-Bildschirm“
+- **Push-Benachrichtigungen** (Web-Push, VAPID, RFC 8291 – nur Web-Crypto, `src/services/push.ts`): dieselben Anlässe wie die E-Mails (Bestätigung, Absage, Zeitvorschlag an Buchende; neue Anfrage/Buchung, Absage, Änderungswunsch an Anbieter). Pro Gerät einschaltbar im Profil, E-Mail optional abbestellbar. VAPID-Schlüssel werden automatisch erzeugt und in `app_settings` gespeichert
 - **Schüler & Abrechnung** (`/w/:id/students`, nur Eigentümer:in/Admin): Standardpreis (pro Termin oder pro 60 Minuten) und individuelle Preise pro Person; nach dem Termin abhaken (stattgefunden / gefehlt, wird berechnet / ausgefallen) – auch direkt aus dem Kalender; bezahlter Betrag pro Termin; Monats- und Jahresübersicht pro Person und gesamt; CSV-Export; Termine für eine Person nachtragen oder einplanen
 
 Nicht enthalten (architektonisch vorbereitet, siehe unten): Online-Zahlung, Rechnungen/Quittungen als PDF, Kalender-Synchronisierung,
-automatisch wiederkehrende Verfügbarkeiten, Teilnehmerlisten-Funktionen, weitere Kanäle (SMS, Push),
+automatisch wiederkehrende Verfügbarkeiten, Teilnehmerlisten-Funktionen, weitere Kanäle (SMS),
 Mehrsprachigkeit, Kontaktimport, WhatsApp-Automatisierung.
 
 ## Rollen
@@ -99,6 +101,8 @@ Module:
 | `bookings` | Buchung mit **eigener Zeit** (`starts_at`/`ends_at`), Status, offenem Zeitvorschlag (`proposed_*`, `proposed_by`) |
 | `booking_events` | Statushistorie und Änderungen |
 | `notifications` | Outbox mit Versandstatus, Versuchen, Fehlertext |
+| `push_subscriptions` | Push-Abo pro Gerät (Endpunkt nur bei bekannten Push-Diensten), wird bei 404/410 automatisch entfernt |
+| `app_settings` | Plattformweite Werte, z. B. VAPID-Schlüssel |
 | `student_rates` | Individueller Preis pro Person und Bereich (sonst `workspaces.default_price_cents` / `price_unit`) |
 | `bookings.attendance`, `price_cents`, `paid_cents`, `paid_at` | Abhaken nach dem Termin; Preis wird beim Abhaken festgeschrieben |
 

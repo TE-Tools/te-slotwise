@@ -14,11 +14,12 @@ import {
   listWorkspacesForUser,
   pendingInvitationsForEmail,
 } from '../services/workspaces.ts';
-import { COMMON_TIME_ZONES, formatRange, isValidTimeZone, LocalTimeError, localToUtc } from '../time.ts';
+import { COMMON_TIME_ZONES, formatDate, formatRange, isValidTimeZone, LocalTimeError, localToUtc } from '../time.ts';
 import { awaitingLabel, proposalNote } from '../views/booking.ts';
 import { bookingBadge, emptyState, errorBox, flash, maskEmail, options, pageHeader, when, type H } from '../views/ui.ts';
 import { startLogin } from './auth.ts';
 import { back, render } from './common.ts';
+import { listSubscriptions } from '../services/push.ts';
 
 type Alternative = { id: string; starts_at: string; ends_at: string; timezone: string };
 
@@ -86,6 +87,37 @@ async function alternativesFor(db: Deps['db'], userId: string, bookings: MyBooki
   return out;
 }
 
+/** Profilbereich: App installieren und Push-Benachrichtigungen auf diesem Gerät. Die Knöpfe steuert app.js. */
+async function appSection(c: Ctx): Promise<H> {
+  const user = c.get('user')!;
+  const { db, push } = c.get('deps');
+  const devices = await listSubscriptions(db, user.id);
+  const key = await push.publicKey();
+  return html`<section class="card narrow" id="app">
+    <h2>App & Push-Benachrichtigungen</h2>
+    <p>TE-Slotwise lässt sich wie eine App auf dem Startbildschirm installieren. Mit Push bekommst du sofort Bescheid, wenn ein Termin bestätigt, abgesagt oder verschoben wird – und als Anbieter, wenn jemand einen Termin möchte.</p>
+    <div class="install-box" data-install-box>
+      <button class="btn btn-secondary" type="button" data-install hidden>App installieren</button>
+      <p class="hint" data-install-ios hidden>iPhone/iPad: In Safari unten auf <strong>Teilen</strong> tippen und <strong>„Zum Home-Bildschirm“</strong> wählen. Push funktioniert auf dem iPhone erst in der installierten App (ab iOS 16.4).</p>
+      <p class="hint" data-installed hidden>Die App ist auf diesem Gerät installiert.</p>
+    </div>
+    <div class="push-box" data-push data-push-key="${key}">
+      <p data-push-status class="muted">Push-Benachrichtigungen werden geprüft …</p>
+      <noscript><p class="muted">Für Push-Benachrichtigungen wird JavaScript benötigt.</p></noscript>
+      <button class="btn" type="button" data-push-on hidden>Push auf diesem Gerät einschalten</button>
+      <button class="btn btn-secondary" type="button" data-push-off hidden>Push auf diesem Gerät ausschalten</button>
+    </div>
+    ${devices.length
+      ? html`<h3>Geräte mit Push</h3>
+          <ul class="list">${devices.map(
+            (d) => html`<li class="row"><span>${d.label || 'Gerät'} <span class="muted">· seit ${formatDate(Date.parse(d.created_at), 'Europe/Berlin')}</span></span>
+              <form method="post" action="/push/devices/${d.id}/delete" class="inline"><button class="btn btn-small btn-secondary" type="submit">Entfernen</button></form></li>`,
+          )}</ul>
+          <form method="post" action="/push/test"><button class="btn btn-secondary" type="submit">Test-Benachrichtigung senden</button></form>`
+      : ''}
+  </section>`;
+}
+
 export function registerAccountRoutes(app: Hono<AppEnv>) {
   app.get('/', async (c) => {
     if (c.get('user')) return c.redirect('/dashboard');
@@ -133,7 +165,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
         <h2>Wer die Daten sieht</h2>
         <p>E-Mail-Adressen und Namen sind nie öffentlich sichtbar. Anbieter (Verwaltende eines Arbeitsbereichs) sehen Name und E-Mail-Adresse nur von Personen, die bei ihnen gebucht haben oder Mitglied ihres Arbeitsbereichs sind. Andere Buchende sehen keine Personendaten.</p>
         <h2>Dienstleister</h2>
-        <p>Betrieb und Datenbank: Cloudflare, Inc. (Rechenzentren auch außerhalb der EU; Grundlage: EU-Standardvertragsklauseln bzw. Data Privacy Framework). E-Mail-Versand${config.mailMode === 'brevo' ? ': Brevo (Sendinblue SAS, Frankreich)' : config.mailMode === 'emailjs' ? ': EmailJS (EmailJS Ltd.) über Microsoft Outlook' : config.mailMode === 'resend' ? ': Resend (Plus Five Five, Inc.)' : ' über einen beauftragten E-Mail-Dienst'}.</p>
+        <p>Betrieb und Datenbank: Cloudflare, Inc. (Rechenzentren auch außerhalb der EU; Grundlage: EU-Standardvertragsklauseln bzw. Data Privacy Framework). Push-Benachrichtigungen (nur wenn du sie auf einem Gerät einschaltest): verschlüsselt über den Push-Dienst deines Browsers bzw. Betriebssystems (Google, Apple, Mozilla oder Microsoft); der Dienst sieht nur eine Geräte-Kennung, nicht den Inhalt. E-Mail-Versand${config.mailMode === 'brevo' ? ': Brevo (Sendinblue SAS, Frankreich)' : config.mailMode === 'emailjs' ? ': EmailJS (EmailJS Ltd.) über Microsoft Outlook' : config.mailMode === 'resend' ? ': Resend (Plus Five Five, Inc.)' : ' über einen beauftragten E-Mail-Dienst'}.</p>
         <h2>Speicherdauer</h2>
         <p>Anmeldelinks verfallen nach 15 Minuten, Sitzungen nach 30 Tagen ohne Nutzung. Protokolle über versendete E-Mails werden nach ${config.retentionNotificationDays} Tagen gelöscht. ${config.retentionBookingDays > 0 ? `Buchungen werden ${config.retentionBookingDays} Tage nach dem Termin gelöscht.` : 'Buchungen bleiben gespeichert, bis das Konto oder der Arbeitsbereich gelöscht wird.'}</p>
         <h2>Deine Rechte</h2>
@@ -153,6 +185,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
       .filter((b) => (b.status === 'requested' || b.status === 'confirmed') && Date.parse(b.ends_at) > now)
       .reverse();
     const needsMe = upcoming.filter((b) => awaiting(b) === 'booker');
+    const pushDevices = (await listSubscriptions(db, user.id)).length;
     return render(c, {
       title: 'Übersicht',
       body: [
@@ -161,6 +194,9 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
         needsMe.length
           ? html`<div class="flash flash-action" role="status">${needsMe.length === 1 ? 'Ein Termin wartet' : `${needsMe.length} Termine warten`} auf deine Zustimmung. <a href="/bookings">Ansehen</a></div>`
           : '',
+        pushDevices
+          ? ''
+          : html`<div class="flash flash-info push-hint">Tipp: Installiere TE-Slotwise als App und schalte Push ein – dann erfährst du sofort, wenn ein Termin bestätigt wird oder jemand einen Termin möchte. <a href="/profile#app">Jetzt einrichten</a></div>`,
         invitations.length
           ? html`<section class="card"><h2>Offene Einladungen</h2><ul class="list">
               ${invitations.map(
@@ -252,6 +288,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
             <fieldset class="field"><legend>E-Mail-Benachrichtigungen</legend>
               <label class="check"><input type="checkbox" name="notify_booking_updates" value="1" ${user.notify_booking_updates ? 'checked' : ''}> Zu meinen eigenen Buchungen (Bestätigung, Absage, Zeitvorschläge)</label>
               <label class="check"><input type="checkbox" name="notify_new_requests" value="1" ${user.notify_new_requests ? 'checked' : ''}> Als Anbieter: neue Anfragen und Änderungswünsche</label>
+              <label class="check"><input type="checkbox" name="notify_email" value="1" ${user.notify_email ? 'checked' : ''}> Per E-Mail (aus = nur Push, solange Push auf einem Gerät eingeschaltet ist)</label>
             </fieldset>
             ${setup && !user.password_hash
               ? html`<div class="field"><label for="new_password">Passwort festlegen (optional, mindestens ${MIN_PASSWORD_LENGTH} Zeichen)</label>
@@ -263,6 +300,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
             <button class="btn" type="submit">Speichern</button>
           </form>
         </section>`,
+        setup ? '' : await appSection(c),
         setup
           ? ''
           : html`<section class="card narrow" id="passwort">
@@ -312,6 +350,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
       displayName: name,
       notifyBookingUpdates: bool(f, 'notify_booking_updates'),
       notifyNewRequests: bool(f, 'notify_new_requests'),
+      notifyEmail: bool(f, 'notify_email'),
     });
     const next = safeNextPath(str(f, 'next'));
     return next ? c.redirect(next, 303) : back(c, '/profile', 'saved');

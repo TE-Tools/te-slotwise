@@ -106,7 +106,7 @@ check(pwWrong.status === 400, 'Falsches Passwort abgewiesen');
 const cal = await owner.req(`/w/${wsId}/calendar?week=${day(3)}`);
 const calHtml = await cal.text();
 check(cal.status === 200 && calHtml.includes('Karla Kunde') && calHtml.includes('week-cell'), 'Anbieter-Kalender mit klickbaren Stunden');
-for (const p of [`/w/${wsId}`, `/w/${wsId}/slots`, `/w/${wsId}/slots/new`, `/w/${wsId}/members`, `/w/${wsId}/offerings`, `/w/${wsId}/notifications`, `/w/${wsId}/students`, `/w/${wsId}/students/check`, `/w/${wsId}/students?year=2026`, '/impressum', '/datenschutz', '/bookings', '/profile']) {
+for (const p of [`/w/${wsId}`, `/w/${wsId}/slots`, `/w/${wsId}/slots/new`, `/w/${wsId}/members`, `/w/${wsId}/offerings`, `/w/${wsId}/notifications`, `/w/${wsId}/students`, `/w/${wsId}/students/check`, `/w/${wsId}/students?year=2026`, `/manifest.webmanifest`, `/sw.js`, '/impressum', '/datenschutz', '/bookings', '/profile']) {
   const r = await owner.req(p);
   check(r.status === 200, `Seite ${p}`);
 }

@@ -9,6 +9,8 @@ und Oberfläche sind aber allgemein gehalten (Unterricht, Beratung, Kurse, Räum
 
 Für Lehrkräfte gibt es unter **Schüler** eine Abrechnungsübersicht: Standard- und Einzelpreise, Termine nach der Stunde abhaken, bezahlte Beträge, Monats- und Jahresübersicht und CSV-Export.
 
+TE-Slotwise ist als **App installierbar** (Startbildschirm, wie der Familienplaner) und schickt auf Wunsch **Push-Benachrichtigungen** – einschalten unter Profil → „App & Push-Benachrichtigungen“. Auf dem iPhone zuerst über Safari → Teilen → „Zum Home-Bildschirm“ installieren (Push ab iOS 16.4). Die Push-Schlüssel (VAPID) erzeugt die App beim ersten Bedarf selbst; optional fest vorgeben mit `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` (Secrets) und `VAPID_SUBJECT`.
+
 Weitere Dokumente:
 
 - [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md) – Produktgrenzen, Rollen, Architektur, Datenmodell, Buchungsablauf

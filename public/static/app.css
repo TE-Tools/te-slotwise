@@ -1339,3 +1339,15 @@ input.money {
   padding: 0.5rem 0.45rem;
   font-size: 0.92rem;
 }
+.install-box,
+.push-box {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  margin: 0.75rem 0;
+}
+.offline {
+  margin: 3rem auto;
+  padding: 0 1rem;
+  text-align: center;
+}

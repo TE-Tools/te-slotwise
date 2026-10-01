@@ -97,4 +97,116 @@
     if (!today || box.scrollWidth <= box.clientWidth) return;
     box.scrollLeft = Math.max(0, today.offsetLeft - (axis ? axis.offsetWidth : 0));
   });
+  // ---------- Installierbare App (PWA) ----------
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  }
+  var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  var isIos = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var installBtns = document.querySelectorAll('[data-install]');
+  var deferredPrompt = null;
+  var show = function (sel, on) {
+    document.querySelectorAll(sel).forEach(function (el) {
+      el.hidden = !on;
+    });
+  };
+  if (standalone) show('[data-installed]', true);
+  else if (isIos) show('[data-install-ios]', true);
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    deferredPrompt = e;
+    show('[data-install]', true);
+  });
+  installBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.finally(function () {
+        deferredPrompt = null;
+        show('[data-install]', false);
+      });
+    });
+  });
+  window.addEventListener('appinstalled', function () {
+    show('[data-install]', false);
+    show('[data-installed]', true);
+  });
+
+  // ---------- Push-Benachrichtigungen ----------
+  var pushBox = document.querySelector('[data-push]');
+  if (pushBox) {
+    var status = pushBox.querySelector('[data-push-status]');
+    var onBtn = pushBox.querySelector('[data-push-on]');
+    var offBtn = pushBox.querySelector('[data-push-off]');
+    var say = function (text) {
+      status.textContent = text;
+    };
+    var keyBytes = function (b64) {
+      var pad = '='.repeat((4 - (b64.length % 4)) % 4);
+      var raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+      var out = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+      return out;
+    };
+    var post = function (path, body) {
+      return fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) {
+        if (!r.ok) throw new Error('Server ' + r.status);
+      });
+    };
+    var render = function (sub) {
+      onBtn.hidden = !!sub;
+      offBtn.hidden = !sub;
+      if (sub) say('Push ist auf diesem Gerät eingeschaltet.');
+      else if (Notification.permission === 'denied') {
+        say('Benachrichtigungen sind für diese Seite im Browser blockiert. Erlaube sie in den Website-Einstellungen und lade die Seite neu.');
+        onBtn.hidden = true;
+      } else say('Push ist auf diesem Gerät ausgeschaltet.');
+    };
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      say(isIos && !standalone ? 'Auf dem iPhone/iPad zuerst die App installieren (siehe oben) und dann hier in der App Push einschalten.' : 'Dieser Browser unterstützt keine Push-Benachrichtigungen.');
+    } else {
+      navigator.serviceWorker.ready
+        .then(function (reg) {
+          return reg.pushManager.getSubscription().then(function (sub) {
+            // Abo beim Server auffrischen (z. B. nach Anmeldung mit anderem Konto auf demselben Gerät).
+            if (sub) post('/push/subscribe', sub.toJSON()).catch(function () {});
+            render(sub);
+            onBtn.addEventListener('click', function () {
+              onBtn.disabled = true;
+              say('Einen Moment …');
+              Notification.requestPermission()
+                .then(function (perm) {
+                  if (perm !== 'granted') throw new Error('perm');
+                  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(pushBox.getAttribute('data-push-key')) });
+                })
+                .then(function (s) {
+                  return post('/push/subscribe', s.toJSON()).then(function () {
+                    window.location.href = '/profile?msg=push_on#app';
+                  });
+                })
+                .catch(function (e) {
+                  onBtn.disabled = false;
+                  if (e && e.message === 'perm') render(null);
+                  else say('Push konnte nicht eingeschaltet werden. Bitte später erneut versuchen.');
+                });
+            });
+            offBtn.addEventListener('click', function () {
+              offBtn.disabled = true;
+              reg.pushManager.getSubscription().then(function (s) {
+                if (!s) return render(null);
+                var endpoint = s.endpoint;
+                return s.unsubscribe().then(function () {
+                  return post('/push/unsubscribe', { endpoint: endpoint }).catch(function () {});
+                }).then(function () {
+                  window.location.reload();
+                });
+              });
+            });
+          });
+        })
+        .catch(function () {
+          say('Push ist gerade nicht verfügbar.');
+        });
+    }
+  }
 })();

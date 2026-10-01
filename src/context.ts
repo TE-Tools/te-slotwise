@@ -5,6 +5,7 @@ import type { Config } from './config.ts';
 import type { Db } from './db.ts';
 import type { Mailer } from './mail/mailer.ts';
 import type { RateLimiter } from './ratelimit.ts';
+import type { PushSender } from './services/push.ts';
 import type { User } from './services/auth.ts';
 import { getWorkspaceForUser, type Workspace } from './services/workspaces.ts';
 
@@ -13,6 +14,8 @@ export interface Deps {
   config: Config;
   mailer: Mailer;
   limiter: RateLimiter;
+  /** Web-Push an die Geräte der Personen. */
+  push: PushSender;
   /** Stößt den Versand ausstehender Benachrichtigungen an (nach Commit). */
   kick: () => void;
 }

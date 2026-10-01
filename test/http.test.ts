@@ -5,6 +5,7 @@ import { loadConfig } from '../src/config.ts';
 import { MemoryMailer } from '../src/mail/mailer.ts';
 import { RateLimiter } from '../src/ratelimit.ts';
 import { dispatchPending } from '../src/services/notifications.ts';
+import { MemoryPushSender } from '../src/services/push.ts';
 import { getOffering } from '../src/services/offerings.ts';
 import { createSlot } from '../src/services/slots.ts';
 import { updateWorkspace } from '../src/services/workspaces.ts';
@@ -16,8 +17,9 @@ async function setup() {
   const db = await freshDb();
   const mailer = new MemoryMailer();
   const config = loadConfig({ APP_URL: ORIGIN });
-  const app = createApp(() => ({ db, config, mailer, limiter: new RateLimiter(), kick: () => void dispatchPending(db, mailer) }));
-  return { db, mailer, app };
+  const push = new MemoryPushSender();
+  const app = createApp(() => ({ db, config, mailer, push, limiter: new RateLimiter(), kick: () => void dispatchPending(db, mailer, { push }) }));
+  return { db, mailer, app, push };
 }
 
 /** Kleiner Browser-Ersatz mit Cookie-Speicher. */
@@ -148,7 +150,7 @@ test('Ohne E-Mail-Versand wird kein Versand behauptet', async () => {
   const db = await freshDb();
   const config = loadConfig({ APP_URL: ORIGIN });
   const { createMailer } = await import('../src/mail/mailer.ts');
-  const app = createApp(() => ({ db, config, mailer: createMailer(config), limiter: new RateLimiter(), kick: () => {} }));
+  const app = createApp(() => ({ db, config, mailer: createMailer(config), push: new MemoryPushSender(), limiter: new RateLimiter(), kick: () => {} }));
   const c = client(app);
   const r = await c.req('/login', { method: 'POST', form: { email: 'a@example.com', mode: 'link' } });
   const text = await r.text();
@@ -233,7 +235,7 @@ test('Plattform-Verwaltung nur für freigeschaltete Admin-Adressen', async () =>
   const db = await freshDb();
   const mailer = new MemoryMailer();
   const config = loadConfig({ APP_URL: ORIGIN, ADMIN_EMAILS: 'Chef@Example.com' });
-  const app = createApp(() => ({ db, config, mailer, limiter: new RateLimiter(), kick: () => {} }));
+  const app = createApp(() => ({ db, config, mailer, push: new MemoryPushSender(), limiter: new RateLimiter(), kick: () => {} }));
   const other = await login(app, mailer, 'nutzer@example.com');
   assert.equal((await other.req('/admin')).status, 404);
   const admin = await login(app, mailer, 'chef@example.com', 'Chef');
@@ -351,4 +353,27 @@ test('Schülerübersicht: nur für Verwaltende, Abhaken, Preise, Zahlungen und C
   // Fremde Rücksprungziele werden ignoriert.
   const evil = await owner.req(`/w/${wsId}/lessons`, { method: 'POST', form: { back: 'https://evil.example/', ids: ids[1], [`att_${ids[1]}`]: 'attended', [`price_${ids[1]}`]: '30', [`paid_${ids[1]}`]: '' } });
   assert.match(evil.headers.get('location')!, new RegExp(`^/w/${wsId}/students\\?msg=`));
+});
+
+test('Push-Abo: nur angemeldet, gleiche Herkunft und bekannte Push-Dienste', async () => {
+  const { app, mailer, db } = await setup();
+  const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' } };
+  const post = (body: unknown, cookie = '', origin = ORIGIN) =>
+    app.request(`${ORIGIN}/push/subscribe`, { method: 'POST', headers: { 'content-type': 'application/json', origin, cookie }, body: JSON.stringify(body) });
+  assert.equal((await post(sub)).status, 401);
+  // Anmelden und das Sitzungscookie übernehmen.
+  await app.request(`${ORIGIN}/login`, { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' }, body: 'email=push%40example.com&mode=link' });
+  const token = /token=([A-Za-z0-9_-]+)/.exec(mailer.sent.at(-1)!.text)![1];
+  const v = await app.request(`${ORIGIN}/auth/verify`, { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' }, body: `token=${token}` });
+  const cookie = /sw_session=[^;]+/.exec(v.headers.get('set-cookie') ?? '')![0];
+  await app.request(`${ORIGIN}/profile`, { method: 'POST', headers: { origin: ORIGIN, cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: 'display_name=Push&notify_email=1' });
+  const page = await (await app.request(`${ORIGIN}/profile`, { headers: { cookie } })).text();
+  assert.match(page, /data-push-key="BMemoryTestKey"/);
+  assert.match(page, /rel="manifest"/);
+  assert.equal((await post(sub, cookie, 'https://evil.example')).status, 403);
+  assert.equal((await post({ ...sub, endpoint: 'https://evil.example/x' }, cookie)).status, 400);
+  assert.equal((await post(sub, cookie)).status, 200);
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM push_subscriptions`))!.n, 1);
+  const profile = await (await app.request(`${ORIGIN}/profile`, { headers: { cookie } })).text();
+  assert.match(profile, /Geräte mit Push/);
 });

@@ -9,6 +9,8 @@ export interface User {
   email_verified_at: string | null;
   notify_booking_updates: number;
   notify_new_requests: number;
+  /** 0 = keine E-Mails, solange Push auf einem Gerät aktiv ist */
+  notify_email: number;
   /** Gesetzt, wenn die Person ein Passwort festgelegt hat (nie an den Browser geben). */
   password_hash: string | null;
   created_at: string;
@@ -161,17 +163,18 @@ export async function purgeExpired(db: Db, now = Date.now()) {
   await db.run(`DELETE FROM login_tokens WHERE expires_at < ?`, [nowIso(now - 24 * 3600_000)]);
 }
 
-export async function updateProfile(db: Db, userId: string, p: { displayName: string; notifyBookingUpdates: boolean; notifyNewRequests: boolean }) {
-  await db.run(`UPDATE users SET display_name = ?, notify_booking_updates = ?, notify_new_requests = ? WHERE id = ?`, [
+export async function updateProfile(db: Db, userId: string, p: { displayName: string; notifyBookingUpdates: boolean; notifyNewRequests: boolean; notifyEmail: boolean }) {
+  await db.run(`UPDATE users SET display_name = ?, notify_booking_updates = ?, notify_new_requests = ?, notify_email = ? WHERE id = ?`, [
     p.displayName,
     p.notifyBookingUpdates ? 1 : 0,
     p.notifyNewRequests ? 1 : 0,
+    p.notifyEmail ? 1 : 0,
     userId,
   ]);
 }
 
 export async function exportUserData(db: Db, userId: string) {
-  const user = await db.get(`SELECT id, email, display_name, email_verified_at, notify_booking_updates, notify_new_requests, created_at FROM users WHERE id = ?`, [userId]);
+  const user = await db.get(`SELECT id, email, display_name, email_verified_at, notify_booking_updates, notify_new_requests, notify_email, created_at FROM users WHERE id = ?`, [userId]);
   const memberships = await db.all(
     `SELECT w.name AS workspace, m.role, m.created_at FROM memberships m JOIN workspaces w ON w.id = m.workspace_id WHERE m.user_id = ?`,
     [userId],
@@ -189,7 +192,8 @@ export async function exportUserData(db: Db, userId: string) {
      JOIN workspaces w ON w.id = b.workspace_id WHERE b.user_id = ? ORDER BY b.starts_at`,
     [userId],
   );
-  return { exportedAt: nowIso(), user, memberships, groups, bookings };
+  const pushDevices = await db.all(`SELECT label, created_at, last_success_at FROM push_subscriptions WHERE user_id = ?`, [userId]);
+  return { exportedAt: nowIso(), user, memberships, groups, bookings, pushDevices };
 }
 
 /** Konten löschen: Nur möglich, wenn die Person keinen Arbeitsbereich allein besitzt. */
@@ -218,6 +222,7 @@ export async function deleteAccount(db: Db, userId: string): Promise<{ ok: true 
     }
     await db.run(`DELETE FROM memberships WHERE user_id = ?`, [userId]);
     await db.run(`DELETE FROM sessions WHERE user_id = ?`, [userId]);
+    await db.run(`DELETE FROM push_subscriptions WHERE user_id = ?`, [userId]);
     await db.run(`UPDATE notifications SET recipient_email = '', payload = '{}' WHERE recipient_user_id = ?`, [userId]);
     // Vergangene Buchungen bleiben für die Anbieter erhalten, aber ohne personenbezogene Daten.
     await db.run(`UPDATE users SET email = ?, display_name = 'Gelöschtes Konto', deleted_at = ? WHERE id = ?`, [`deleted-${userId}@invalid`, now, userId]);
