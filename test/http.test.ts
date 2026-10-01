@@ -45,7 +45,7 @@ function client(app: ReturnType<typeof createApp>) {
 
 async function login(app: ReturnType<typeof createApp>, mailer: MemoryMailer, email: string, name = 'Testperson') {
   const c = client(app);
-  const r1 = await c.req('/login', { method: 'POST', form: { email } });
+  const r1 = await c.req('/login', { method: 'POST', form: { email, mode: 'link' } });
   assert.equal(r1.status, 200);
   const mail = mailer.sent.at(-1)!;
   assert.equal(mail.to, email);
@@ -106,7 +106,7 @@ test('Öffentliche Seite zeigt nur öffentliche freie Slots und keine Personenda
   assert.match(b.headers.get('location')!, /booked_confirmed/);
 
   const anon = client(app);
-  const page = await (await anon.req(`/p/${token}`)).text();
+  const page = await (await anon.req(`/p/${token}?view=list`)).text();
   assert.doesNotMatch(page, /Kundin Geheim|kunde@example\.com/);
   assert.doesNotMatch(page, /12:00/, 'interner Slot nicht öffentlich');
   assert.doesNotMatch(page, /10:00–11:00/, 'gebuchter Slot nicht mehr frei');
@@ -150,7 +150,7 @@ test('Ohne E-Mail-Versand wird kein Versand behauptet', async () => {
   const { createMailer } = await import('../src/mail/mailer.ts');
   const app = createApp(() => ({ db, config, mailer: createMailer(config), limiter: new RateLimiter(), kick: () => {} }));
   const c = client(app);
-  const r = await c.req('/login', { method: 'POST', form: { email: 'a@example.com' } });
+  const r = await c.req('/login', { method: 'POST', form: { email: 'a@example.com', mode: 'link' } });
   const text = await r.text();
   assert.match(text, /nicht eingerichtet/);
   assert.doesNotMatch(text, /Prüfe dein Postfach/);
@@ -243,4 +243,38 @@ test('Plattform-Verwaltung nur für freigeschaltete Admin-Adressen', async () =>
   const t = await admin.req('/admin/test-mail', { method: 'POST' });
   assert.match(t.headers.get('location')!, /test=ok/);
   assert.equal(mailer.sent.at(-1)!.to, 'chef@example.com');
+});
+
+test('Passwort: nach E-Mail-Anmeldung festlegen, danach mit Passwort anmelden', async () => {
+  const { app, mailer } = await setup();
+  const c = await login(app, mailer, 'pw@example.com', 'Paula');
+  // Zu kurz → abgelehnt
+  const weak = await c.req('/profile/password', { method: 'POST', form: { new_password: 'kurz', new_password2: 'kurz' } });
+  assert.match(weak.headers.get('location')!, /password_weak/);
+  const ok = await c.req('/profile/password', { method: 'POST', form: { new_password: 'sehr-geheim-123', new_password2: 'sehr-geheim-123' } });
+  assert.match(ok.headers.get('location')!, /password_saved/);
+
+  const fresh = client(app);
+  const wrong = await fresh.req('/login', { method: 'POST', form: { email: 'pw@example.com', password: 'falsch-falsch', mode: 'password' } });
+  assert.equal(wrong.status, 400);
+  assert.match(await wrong.text(), /stimmen nicht/);
+  // Unbekanntes Konto: gleiche Meldung
+  const unknown = await fresh.req('/login', { method: 'POST', form: { email: 'gibtsnicht@example.com', password: 'egal-egal-egal', mode: 'password' } });
+  assert.match(await unknown.text(), /stimmen nicht/);
+  const good = await fresh.req('/login', { method: 'POST', form: { email: 'PW@example.com', password: 'sehr-geheim-123', mode: 'password' } });
+  assert.equal(good.status, 303);
+  assert.equal((await fresh.req('/dashboard')).status, 200);
+  // Ändern verlangt das aktuelle Passwort
+  const noCurrent = await fresh.req('/profile/password', { method: 'POST', form: { current_password: 'falsch', new_password: 'neues-passwort-1', new_password2: 'neues-passwort-1' } });
+  assert.match(noCurrent.headers.get('location')!, /password_wrong/);
+});
+
+test('Passwort: Sperre nach zu vielen Fehlversuchen', async () => {
+  const { app, mailer } = await setup();
+  const c = await login(app, mailer, 'lock@example.com');
+  await c.req('/profile/password', { method: 'POST', form: { new_password: 'richtiges-pw-1', new_password2: 'richtiges-pw-1' } });
+  const x = client(app);
+  for (let i = 0; i < 8; i++) await x.req('/login', { method: 'POST', form: { email: 'lock@example.com', password: 'falsch-' + i, mode: 'password' } });
+  const locked = await x.req('/login', { method: 'POST', form: { email: 'lock@example.com', password: 'richtiges-pw-1', mode: 'password' } });
+  assert.match(await locked.text(), /gesperrt/);
 });

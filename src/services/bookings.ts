@@ -211,7 +211,7 @@ export async function providerDecision(
       // Bestätigt wird die von der buchenden Person angefragte Zeit; ein eigener offener Vorschlag entfällt damit.
       await db.run(
         `UPDATE bookings SET status = ?, holds_seat = CASE WHEN ? = 'confirmed' THEN 1 ELSE holds_seat END,
-           proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL, proposal_note = '',
+           proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL, proposed_slot_id = NULL, proposal_note = '',
            cancel_requested_at = NULL, updated_at = ? WHERE id = ? AND workspace_id = ?`,
         [to, to, nowIso(), bookingId, wsId],
       );
@@ -257,7 +257,7 @@ export async function proposeTime(
 
       if (by === 'booker' && c.status === 'requested') {
         await db.run(
-          `UPDATE bookings SET starts_at = ?, ends_at = ?, proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL,
+          `UPDATE bookings SET starts_at = ?, ends_at = ?, proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL, proposed_slot_id = NULL,
              proposal_note = ?, updated_at = ? WHERE id = ?`,
           [s, e, note.slice(0, 500), nowIso(now), c.id],
         );
@@ -266,7 +266,7 @@ export async function proposeTime(
         return 'ok';
       }
 
-      await db.run(`UPDATE bookings SET proposed_starts_at = ?, proposed_ends_at = ?, proposed_by = ?, proposal_note = ?, updated_at = ? WHERE id = ?`, [
+      await db.run(`UPDATE bookings SET proposed_starts_at = ?, proposed_ends_at = ?, proposed_by = ?, proposed_slot_id = NULL, proposal_note = ?, updated_at = ? WHERE id = ?`, [
         s,
         e,
         by,
@@ -308,13 +308,13 @@ export async function respondToProposal(
         if (Date.parse(c.proposed_starts_at) <= now) return 'bad_time';
         // Beide Seiten haben dieser Zeit zugestimmt → fix.
         await db.run(
-          `UPDATE bookings SET status = 'confirmed', holds_seat = 1, starts_at = proposed_starts_at, ends_at = proposed_ends_at,
-             proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL, proposal_note = '', updated_at = ? WHERE id = ?`,
+          `UPDATE bookings SET status = 'confirmed', holds_seat = 1, starts_at = proposed_starts_at, ends_at = proposed_ends_at, slot_id = COALESCE(proposed_slot_id, slot_id),
+             proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL, proposed_slot_id = NULL, proposal_note = '', updated_at = ? WHERE id = ?`,
           [nowIso(now), c.id],
         );
         await logEvent(db, c, c.status, 'confirmed', scope.userId, `Vorschlag angenommen: ${newWhen}`);
       } else {
-        await db.run(`UPDATE bookings SET proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL, proposal_note = '', updated_at = ? WHERE id = ?`, [
+        await db.run(`UPDATE bookings SET proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL, proposed_slot_id = NULL, proposal_note = '', updated_at = ? WHERE id = ?`, [
           nowIso(now),
           c.id,
         ]);
@@ -331,6 +331,61 @@ export async function respondToProposal(
   }
 }
 
+/**
+ * Buchende schlagen statt einer freien Uhrzeit einen anderen vorgegebenen Slot vor.
+ * Der Slot muss für die Person sichtbar, veröffentlicht, fest, frei und vom selben Angebot sein.
+ * Bei einer offenen Anfrage wechselt die Anfrage direkt (die Anbieterseite muss sie ohnehin bestätigen);
+ * bei einem festen Termin entsteht ein Vorschlag, dem die Anbieterseite zustimmen muss.
+ */
+export async function proposeSlot(
+  db: Db,
+  appUrl: string,
+  userId: string,
+  membershipId: string | null,
+  bookingId: string,
+  slotId: string,
+  now = Date.now(),
+): Promise<ActionResult> {
+  try {
+    return await db.tx(async (): Promise<ActionResult> => {
+      const c = await loadCtx(db, bookingId);
+      if (!c || c.user_id !== userId) return 'not_found';
+      if (c.status !== 'requested' && c.status !== 'confirmed') return 'invalid_state';
+      if (Date.parse(c.starts_at) <= now) return 'invalid_state';
+      const slot = await db.get<{ id: string; starts_at: string; ends_at: string; capacity: number; taken: number }>(
+        `SELECT s.id, s.starts_at, s.ends_at, s.capacity, ${TAKEN_SQL} AS taken
+         FROM slots s JOIN offerings o ON o.id = s.offering_id AND o.workspace_id = s.workspace_id
+         WHERE s.id = @sid AND s.workspace_id = @ws AND s.offering_id = @off AND s.kind = 'fixed' AND s.status = 'published'
+           AND o.archived_at IS NULL AND s.id <> @cur AND ${SLOT_VISIBLE_SQL}`,
+        { sid: slotId, ws: c.workspace_id, off: c.offering_id, cur: c.slot_id, mid: membershipId },
+      );
+      if (!slot) return 'not_found';
+      if (Date.parse(slot.starts_at) <= now) return 'bad_time';
+      if (slot.taken >= slot.capacity) return 'full';
+      const newWhen = formatRange(slot.starts_at, slot.ends_at, c.timezone);
+      if (c.status === 'requested') {
+        await db.run(
+          `UPDATE bookings SET slot_id = ?, starts_at = ?, ends_at = ?, proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL, proposed_slot_id = NULL, updated_at = ? WHERE id = ?`,
+          [slot.id, slot.starts_at, slot.ends_at, nowIso(now), c.id],
+        );
+        await logEvent(db, c, c.status, c.status, userId, `Anderen Termin gewählt: ${newWhen}`);
+      } else {
+        await db.run(
+          `UPDATE bookings SET proposed_starts_at = ?, proposed_ends_at = ?, proposed_by = 'booker', proposed_slot_id = ?, proposal_note = '', updated_at = ? WHERE id = ?`,
+          [slot.starts_at, slot.ends_at, slot.id, nowIso(now), c.id],
+        );
+        await logEvent(db, c, c.status, c.status, userId, `Anderen Termin vorgeschlagen: ${newWhen}`);
+      }
+      await notifyProviders(db, appUrl, c, 'proposal_to_provider', userId, { newWhen });
+      return 'ok';
+    });
+  } catch (e) {
+    if (isUniqueViolation(e)) return 'invalid_state';
+    if (isFull(e)) return 'full';
+    throw e;
+  }
+}
+
 export type BookerResult = 'withdrawn' | 'cancelled' | 'cancel_requested' | 'not_found' | 'invalid_state';
 
 /** Buchende: Anfrage zurückziehen oder fixen Termin absagen (bzw. Absage anfragen). */
@@ -341,7 +396,7 @@ export async function bookerAction(db: Db, appUrl: string, userId: string, booki
     if (Date.parse(c.starts_at) <= now) return 'invalid_state';
     if (action === 'withdraw') {
       if (c.status !== 'requested') return 'invalid_state';
-      await db.run(`UPDATE bookings SET status = 'withdrawn', proposed_by = NULL, proposed_starts_at = NULL, proposed_ends_at = NULL, updated_at = ? WHERE id = ?`, [
+      await db.run(`UPDATE bookings SET status = 'withdrawn', proposed_by = NULL, proposed_slot_id = NULL, proposed_starts_at = NULL, proposed_ends_at = NULL, updated_at = ? WHERE id = ?`, [
         nowIso(now),
         c.id,
       ]);
@@ -352,7 +407,7 @@ export async function bookerAction(db: Db, appUrl: string, userId: string, booki
     if (c.status !== 'confirmed') return 'invalid_state';
     const beforeCutoff = Date.parse(c.starts_at) - c.cancel_cutoff_hours * 3600_000 > now;
     if (c.allow_self_cancel && beforeCutoff) {
-      await db.run(`UPDATE bookings SET status = 'cancelled', proposed_by = NULL, proposed_starts_at = NULL, proposed_ends_at = NULL, updated_at = ? WHERE id = ?`, [
+      await db.run(`UPDATE bookings SET status = 'cancelled', proposed_by = NULL, proposed_slot_id = NULL, proposed_starts_at = NULL, proposed_ends_at = NULL, updated_at = ? WHERE id = ?`, [
         nowIso(now),
         c.id,
       ]);
@@ -381,6 +436,8 @@ export interface BookingTimes {
 
 export interface MyBookingRow extends BookingTimes {
   id: string;
+  slot_id: string;
+  offering_id: string;
   cancel_requested_at: string | null;
   location: string;
   online_info: string;
@@ -395,7 +452,7 @@ export interface MyBookingRow extends BookingTimes {
 export async function listMyBookings(db: Db, userId: string) {
   return await db.all<MyBookingRow>(
     `SELECT b.id, b.status, b.cancel_requested_at, b.starts_at, b.ends_at, s.timezone,
-       b.proposed_starts_at, b.proposed_ends_at, b.proposed_by, b.proposal_note,
+       b.proposed_starts_at, b.proposed_ends_at, b.proposed_by, b.proposal_note, b.slot_id, b.offering_id,
        COALESCE(s.location, o.location) AS location, COALESCE(s.online_info, o.online_info) AS online_info,
        o.name AS offering_name, w.name AS workspace_name, w.id AS workspace_id, o.allow_self_cancel, o.cancel_cutoff_hours, b.created_at
      FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN offerings o ON o.id = b.offering_id JOIN workspaces w ON w.id = b.workspace_id
@@ -471,7 +528,7 @@ export async function listWorkspaceBookings(db: Db, wsId: string, f: BookingFilt
   }
   return await db.all<WsBookingRow>(
     `SELECT b.id, b.status, b.note, b.cancel_requested_at, b.created_at, b.starts_at, b.ends_at, s.timezone,
-       b.proposed_starts_at, b.proposed_ends_at, b.proposed_by, b.proposal_note,
+       b.proposed_starts_at, b.proposed_ends_at, b.proposed_by, b.proposal_note, b.slot_id, b.offering_id,
        o.name AS offering_name, s.id AS slot_id, s.kind AS slot_kind,
        u.display_name AS booker_name, u.email AS booker_email, u.id AS user_id,
        EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = b.workspace_id AND m.user_id = b.user_id) AS is_member,

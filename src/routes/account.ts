@@ -1,9 +1,12 @@
 import type { Hono } from 'hono';
 import { html } from 'hono/html';
 import { ROLE_LABELS, safeNextPath } from '../authz.ts';
-import { bool, notFound, readForm, requireUser, str, oneOf, type AppEnv, type Ctx } from '../context.ts';
-import { deleteAccount, exportUserData, updateProfile } from '../services/auth.ts';
-import { awaiting, bookerAction, listMyBookings, proposeTime, respondToProposal, type MyBookingRow } from '../services/bookings.ts';
+import { bool, notFound, readForm, requireUser, str, oneOf, type AppEnv, type Ctx, type Deps } from '../context.ts';
+import { getCookie } from 'hono/cookie';
+import { MIN_PASSWORD_LENGTH, passwordProblem, verifyPassword } from '../password.ts';
+import { deleteAccount, exportUserData, SESSION_COOKIE, setPassword, updateProfile } from '../services/auth.ts';
+import { awaiting, bookerAction, listMyBookings, proposeSlot, proposeTime, respondToProposal, type MyBookingRow } from '../services/bookings.ts';
+import { listVisibleSlots } from '../services/slots.ts';
 import {
   acceptInvitation,
   createWorkspace,
@@ -11,13 +14,15 @@ import {
   listWorkspacesForUser,
   pendingInvitationsForEmail,
 } from '../services/workspaces.ts';
-import { COMMON_TIME_ZONES, isValidTimeZone, LocalTimeError, localToUtc } from '../time.ts';
-import { awaitingLabel, proposalNote, timeChangeForm } from '../views/booking.ts';
+import { COMMON_TIME_ZONES, formatRange, isValidTimeZone, LocalTimeError, localToUtc } from '../time.ts';
+import { awaitingLabel, proposalNote } from '../views/booking.ts';
 import { bookingBadge, emptyState, errorBox, flash, maskEmail, options, pageHeader, when, type H } from '../views/ui.ts';
 import { startLogin } from './auth.ts';
 import { back, render } from './common.ts';
 
-function bookingCard(b: MyBookingRow, now: number): H {
+type Alternative = { id: string; starts_at: string; ends_at: string; timezone: string };
+
+function bookingCard(b: MyBookingRow, now: number, alternatives: Alternative[] = []): H {
   const past = Date.parse(b.ends_at) <= now;
   const started = Date.parse(b.starts_at) <= now;
   const active = (b.status === 'requested' || b.status === 'confirmed') && !started;
@@ -43,9 +48,42 @@ function bookingCard(b: MyBookingRow, now: number): H {
             : html`<form method="post" action="/bookings/${b.id}/cancel" class="inline" data-confirm="${canSelfCancel ? 'Termin wirklich absagen?' : 'Absage bei der Anbieterseite anfragen?'}">
                 <button class="btn btn-danger" type="submit">${canSelfCancel ? 'Termin absagen' : 'Absage anfragen'}</button></form>`}
         </div>
-        ${timeChangeForm(`/bookings/${b.id}/propose`, b, b.status === 'requested' ? 'Wunschzeit ändern' : 'Andere Zeit vorschlagen')}`
+        ${b.proposed_by === 'booker' ? '' : slotChangeForm(b, alternatives)}`
       : ''}
   </li>`;
+}
+
+/** Anderen freien Termin desselben Angebots auswählen (statt freier Uhrzeit). */
+function slotChangeForm(b: MyBookingRow, alternatives: Alternative[]): H | '' {
+  if (!alternatives.length) return '';
+  return html`<details class="inline-form">
+    <summary>${b.status === 'requested' ? 'Anderen Termin wählen' : 'Anderen Termin vorschlagen'}</summary>
+    <form method="post" action="/bookings/${b.id}/propose-slot" class="stack">
+      <label>Freier Termin <select name="slot_id" required>${alternatives.map(
+        (a) => html`<option value="${a.id}">${formatRange(a.starts_at, a.ends_at, a.timezone)}</option>`,
+      )}</select></label>
+      <p class="hint">${b.status === 'requested' ? 'Deine Anfrage wechselt auf diesen Termin und wartet weiter auf Bestätigung.' : 'Die Anbieterseite muss zustimmen. Bis dahin gilt dein bisheriger Termin.'}</p>
+      <button class="btn" type="submit">${b.status === 'requested' ? 'Termin wechseln' : 'Vorschlag senden'}</button>
+    </form>
+  </details>`;
+}
+
+/** Freie Alternativen je Buchung (gleiches Angebot, für die Person sichtbar, nicht schon gebucht). */
+async function alternativesFor(db: Deps['db'], userId: string, bookings: MyBookingRow[]) {
+  const out = new Map<string, Alternative[]>();
+  const cache = new Map<string, Awaited<ReturnType<typeof listVisibleSlots>>>();
+  for (const b of bookings) {
+    const key = `${b.workspace_id}|${b.offering_id}`;
+    if (!cache.has(key)) {
+      const m = await db.get<{ id: string }>(`SELECT id FROM memberships WHERE workspace_id = ? AND user_id = ?`, [b.workspace_id, userId]);
+      cache.set(key, await listVisibleSlots(db, b.workspace_id, m?.id ?? null, userId, { offeringId: b.offering_id }));
+    }
+    out.set(
+      b.id,
+      cache.get(key)!.filter((s) => s.kind === 'fixed' && !s.my_status && s.id !== b.slot_id && s.taken < s.capacity).slice(0, 60),
+    );
+  }
+  return out;
 }
 
 export function registerAccountRoutes(app: Hono<AppEnv>) {
@@ -207,9 +245,29 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
               <label class="check"><input type="checkbox" name="notify_booking_updates" value="1" ${user.notify_booking_updates ? 'checked' : ''}> Zu meinen eigenen Buchungen (Bestätigung, Absage, Zeitvorschläge)</label>
               <label class="check"><input type="checkbox" name="notify_new_requests" value="1" ${user.notify_new_requests ? 'checked' : ''}> Als Anbieter: neue Anfragen und Änderungswünsche</label>
             </fieldset>
+            ${setup && !user.password_hash
+              ? html`<div class="field"><label for="new_password">Passwort festlegen (optional, mindestens ${MIN_PASSWORD_LENGTH} Zeichen)</label>
+                  <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" maxlength="200">
+                  <span class="hint">Damit meldest du dich künftig direkt mit E-Mail und Passwort an.</span></div>`
+              : ''}
             <button class="btn" type="submit">Speichern</button>
           </form>
         </section>`,
+        setup
+          ? ''
+          : html`<section class="card narrow" id="passwort">
+              <h2>Passwort</h2>
+              <p>${user.password_hash ? 'Du kannst dich mit E-Mail und Passwort anmelden.' : 'Noch kein Passwort festgelegt – du meldest dich per E-Mail-Link an.'}</p>
+              <form method="post" action="/profile/password" class="stack">
+                ${user.password_hash
+                  ? html`<div class="field"><label for="current_password">Aktuelles Passwort</label><input id="current_password" name="current_password" type="password" autocomplete="current-password" required maxlength="200"></div>`
+                  : ''}
+                <div class="field"><label for="pw1">${user.password_hash ? 'Neues Passwort' : 'Passwort'} (mindestens ${MIN_PASSWORD_LENGTH} Zeichen)</label><input id="pw1" name="new_password" type="password" autocomplete="new-password" required minlength="${MIN_PASSWORD_LENGTH}" maxlength="200"></div>
+                <div class="field"><label for="pw2">Passwort wiederholen</label><input id="pw2" name="new_password2" type="password" autocomplete="new-password" required minlength="${MIN_PASSWORD_LENGTH}" maxlength="200"></div>
+                <button class="btn" type="submit">${user.password_hash ? 'Passwort ändern' : 'Passwort festlegen'}</button>
+                <p class="hint">Andere angemeldete Geräte werden dabei abgemeldet.</p>
+              </form>
+            </section>`,
         setup
           ? ''
           : html`<section class="card narrow">
@@ -233,6 +291,11 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     const f = await readForm(c);
     const name = str(f, 'display_name', 80);
     if (!name) return back(c, '/profile?setup=1');
+    const newPw = typeof f.new_password === 'string' ? f.new_password : '';
+    if (newPw && !user.password_hash) {
+      if (passwordProblem(newPw)) return back(c, '/profile?setup=1', 'password_weak');
+      await setPassword(c.get('deps').db, user.id, newPw, getCookie(c, SESSION_COOKIE));
+    }
     await updateProfile(c.get('deps').db, user.id, {
       displayName: name,
       notifyBookingUpdates: bool(f, 'notify_booking_updates'),
@@ -240,6 +303,21 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     });
     const next = safeNextPath(str(f, 'next'));
     return next ? c.redirect(next, 303) : back(c, '/profile', 'saved');
+  });
+
+  app.post('/profile/password', async (c) => {
+    const user = requireUser(c);
+    const { db } = c.get('deps');
+    const f = await readForm(c);
+    const pw = typeof f.new_password === 'string' ? f.new_password : '';
+    if (pw !== (typeof f.new_password2 === 'string' ? f.new_password2 : '')) return back(c, '/profile#passwort', 'password_mismatch');
+    if (passwordProblem(pw)) return back(c, '/profile#passwort', 'password_weak');
+    if (user.password_hash) {
+      const current = typeof f.current_password === 'string' ? f.current_password : '';
+      if (!(await verifyPassword(current.slice(0, 200), user.password_hash))) return back(c, '/profile#passwort', 'password_wrong');
+    }
+    await setPassword(db, user.id, pw, getCookie(c, SESSION_COOKIE));
+    return back(c, '/profile', 'password_saved');
   });
 
   app.get('/profile/export', async (c) => {
@@ -265,13 +343,14 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     const now = Date.now();
     const all = await listMyBookings(c.get('deps').db, user.id);
     const upcoming = all.filter((b) => Date.parse(b.ends_at) > now && (b.status === 'requested' || b.status === 'confirmed')).reverse();
+    const alts = await alternativesFor(c.get('deps').db, user.id, upcoming);
     const rest = all.filter((b) => !upcoming.includes(b));
     return render(c, {
       title: 'Meine Termine',
       body: [
         flash(c.req.query('msg')),
         pageHeader('Meine Termine', 'Nur du siehst diese Übersicht.'),
-        html`<h2>Anstehend</h2>${upcoming.length ? html`<ul class="cards">${upcoming.map((b) => bookingCard(b, now))}</ul>` : emptyState('Keine anstehenden Termine', 'Buche über einen Arbeitsbereich oder einen geteilten Link.')}`,
+        html`<h2>Anstehend</h2>${upcoming.length ? html`<ul class="cards">${upcoming.map((b) => bookingCard(b, now, alts.get(b.id)))}</ul>` : emptyState('Keine anstehenden Termine', 'Buche über einen Arbeitsbereich oder einen geteilten Link.')}`,
         rest.length ? html`<h2>Vergangen, abgesagt, abgelehnt</h2><ul class="cards">${rest.slice(0, 100).map((b) => bookingCard(b, now))}</ul>` : '',
       ],
     });
@@ -301,17 +380,17 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     return back(c, '/bookings', bookerResultMsg[r]);
   });
 
-  app.post('/bookings/:id/propose', async (c) => {
+  app.post('/bookings/:id/propose-slot', async (c) => {
     const user = requireUser(c);
     const { db, config, kick } = c.get('deps');
     const f = await readForm(c);
     const booking = (await listMyBookings(db, user.id)).find((b) => b.id === c.req.param('id'));
     if (!booking) notFound();
-    const parsed = parseTimeChange(f, booking.timezone);
-    if (!parsed) return back(c, '/bookings', 'bad_time');
-    const r = await proposeTime(db, config.appUrl, 'booker', { userId: user.id }, booking.id, parsed.start, parsed.end, str(f, 'note', 500));
+    const m = await db.get<{ id: string }>(`SELECT id FROM memberships WHERE workspace_id = ? AND user_id = ?`, [booking.workspace_id, user.id]);
+    const r = await proposeSlot(db, config.appUrl, user.id, m?.id ?? null, booking.id, str(f, 'slot_id', 50));
     kick();
-    return back(c, '/bookings', r === 'ok' ? 'proposal_sent' : r === 'bad_time' ? 'bad_time' : 'invalid_state');
+    const msg = r === 'ok' ? (booking.status === 'requested' ? 'slot_switched' : 'proposal_sent') : r === 'full' ? 'book_full' : r === 'bad_time' ? 'book_too_late' : 'invalid_state';
+    return back(c, '/bookings', msg);
   });
 
   app.post('/bookings/:id/proposal', async (c) => {

@@ -1,5 +1,6 @@
 import type { Db } from '../db.ts';
 import { hashToken, newId, newToken, nowIso } from '../ids.ts';
+import { hashPassword, verifyPassword } from '../password.ts';
 
 export interface User {
   id: string;
@@ -8,6 +9,8 @@ export interface User {
   email_verified_at: string | null;
   notify_booking_updates: number;
   notify_new_requests: number;
+  /** Gesetzt, wenn die Person ein Passwort festgelegt hat (nie an den Browser geben). */
+  password_hash: string | null;
   created_at: string;
 }
 
@@ -100,6 +103,51 @@ export async function userForSession(db: Db, token: string | undefined, now = Da
 
 export async function destroySession(db: Db, token: string | undefined) {
   if (token) await db.run(`DELETE FROM sessions WHERE token_hash = ?`, [hashToken(token)]);
+}
+
+export const MAX_FAILED_LOGINS = 8;
+export const LOCK_MS = 15 * 60_000;
+
+export type PasswordLogin = { ok: true; user: User; sessionToken: string } | { ok: false; reason: 'invalid' | 'locked' };
+
+/**
+ * Anmeldung mit E-Mail und Passwort. Nur für Konten mit bestätigter Adresse und gesetztem Passwort.
+ * Nach mehreren Fehlversuchen wird das Konto kurz gesperrt. Die Meldung verrät nicht, ob es das Konto gibt.
+ */
+export async function loginWithPassword(db: Db, email: string, password: string, now = Date.now()): Promise<PasswordLogin> {
+  const user = await db.get<User & { failed_logins: number; locked_until: string | null }>(
+    `SELECT * FROM users WHERE email = ? AND deleted_at IS NULL AND email_verified_at IS NOT NULL`,
+    [email],
+  );
+  if (user?.locked_until && Date.parse(user.locked_until) > now) return { ok: false, reason: 'locked' };
+  const ok = await verifyPassword(password, user?.password_hash);
+  if (!user || !ok) {
+    if (user) {
+      const failed = user.failed_logins + 1;
+      await db.run(`UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?`, [
+        failed >= MAX_FAILED_LOGINS ? 0 : failed,
+        failed >= MAX_FAILED_LOGINS ? nowIso(now + LOCK_MS) : null,
+        user.id,
+      ]);
+    }
+    return { ok: false, reason: 'invalid' };
+  }
+  await db.run(`UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?`, [user.id]);
+  return { ok: true, user, sessionToken: await createSession(db, user.id, now) };
+}
+
+/** Passwort setzen oder ändern. Alle anderen Sitzungen werden dabei abgemeldet. */
+export async function setPassword(db: Db, userId: string, password: string, keepSessionToken?: string) {
+  await db.run(`UPDATE users SET password_hash = ?, password_updated_at = ?, failed_logins = 0, locked_until = NULL WHERE id = ?`, [
+    await hashPassword(password),
+    nowIso(),
+    userId,
+  ]);
+  await db.run(`DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?`, [userId, keepSessionToken ? hashToken(keepSessionToken) : '']);
+}
+
+export async function removePassword(db: Db, userId: string) {
+  await db.run(`UPDATE users SET password_hash = NULL, password_updated_at = ? WHERE id = ?`, [nowIso(), userId]);
 }
 
 /** Entfernt abgelaufene Sitzungen und Anmeldetokens (Datensparsamkeit). */

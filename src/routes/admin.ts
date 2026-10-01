@@ -54,7 +54,7 @@ import {
   type Invitation,
 } from '../services/workspaces.ts';
 import { TEMPLATE_LABELS, type Template } from '../mail/templates.ts';
-import { addDays, COMMON_TIME_ZONES, durationLabel, formatDate, formatTime, isValidTimeZone, LocalTimeError, localDate, localTime, localToUtc } from '../time.ts';
+import { addDays, COMMON_TIME_ZONES, durationLabel, isoWeekday, formatDate, formatTime, isValidTimeZone, LocalTimeError, localDate, localTime, localToUtc } from '../time.ts';
 import { awaitingLabel, proposalNote, timeChangeForm } from '../views/booking.ts';
 import { monthCalendar, monthRange, parseMonth } from '../views/calendar.ts';
 import { parseWeek, weekCalendar, weekRange, type WeekItem } from '../views/week.ts';
@@ -598,8 +598,8 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
       return `/w/${ws.id}/calendar?${p}`;
     };
     return page(c, ws, 'calendar', 'Kalender', [
-      flash(c.req.query('msg')),
-      pageHeader('Wochenkalender', 'Klick auf einen Eintrag öffnet Slot oder Buchung. Zum Verschieben „Verschieben / andere Zeit vorschlagen“ an der Buchung nutzen.', html`<a class="btn" href="/w/${ws.id}/slots/new">Slots anlegen</a>`),
+      flash(c.req.query('msg'), c.req.query('n') ? `(${Number(c.req.query('n'))} angelegt${Number(c.req.query('k')) ? `, ${Number(c.req.query('k'))} übersprungen` : ''})` : undefined),
+      pageHeader('Wochenkalender', 'Auf eine freie (graue) Uhrzeit klicken, um dort Slots anzulegen. Klick auf einen Eintrag öffnet Slot oder Buchung.', html`<a class="btn" href="/w/${ws.id}/slots/new">Slots anlegen</a>`),
       html`<form method="get" action="/w/${ws.id}/calendar" class="filters">
         <input type="hidden" name="week" value="${weekStart}">
         <label>Angebot <select name="offering"><option value="">alle</option>${options(offerings.map((o) => ({ value: o.id, label: o.name })), offeringId)}</select></label>
@@ -611,6 +611,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         items,
         hrefFor: (w) => q({ week: w }),
         dayHref: (d) => `/w/${ws.id}/bookings?from=${d}&to=${d}`,
+        cellHref: can(ws.role, 'slots.manage') ? (d, hhmm) => `/w/${ws.id}/slots/new?date=${d}&from=${hhmm}${offeringId ? `&offering=${offeringId}` : ''}` : undefined,
         legend: [
           { kind: 'free', label: 'Frei (gern)' },
           { kind: 'reluctant', label: 'Eher ungern' },
@@ -802,61 +803,47 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     };
   }
 
+  /** Ein einziges, einfaches Formular: Zeitraum + Uhrzeit von–bis, wird in Termine des Angebots aufgeteilt. */
   const newSlotsPage = async (c: Ctx, ws: WsContext, error?: string) => {
     const { db } = c.get('deps');
     const offerings = await listOfferings(db, ws.id);
     if (!offerings.length) {
-      return page(c, ws, 'slots', 'Slots anlegen', [pageHeader('Slots anlegen'), emptyState('Zuerst ein Angebot anlegen', 'Slots gehören immer zu einem Angebot.', html`<a class="btn" href="/w/${ws.id}/offerings/new">Angebot anlegen</a>`)]);
+      return page(c, ws, 'slots', 'Slots anlegen', [pageHeader('Slots anlegen'), emptyState('Zuerst ein Angebot anlegen', 'Slots gehören immer zu einem Angebot (z. B. „Einzelstunde, 45 Min.“).', html`<a class="btn" href="/w/${ws.id}/offerings/new">Angebot anlegen</a>`)]);
     }
     const preselect = c.req.query('offering') ?? offerings[0].id;
     const off = offerings.find((o) => o.id === preselect) ?? offerings[0];
-    const tomorrow = addDays(localDate(Date.now(), ws.timezone), 1);
+    const qDate = c.req.query('date');
+    const date = qDate && /^\d{4}-\d{2}-\d{2}$/.test(qDate) ? qDate : addDays(localDate(Date.now(), ws.timezone), 1);
+    const qFrom = c.req.query('from');
+    const from = qFrom && /^\d{2}:\d{2}$/.test(qFrom) ? qFrom : '16:00';
+    const fromMin = Number(from.slice(0, 2)) * 60 + Number(from.slice(3));
+    const toMin = Math.min(fromMin + Math.max(off.duration_min + off.buffer_min, 60), 23 * 60 + 55);
+    const to = `${String(Math.floor(toMin / 60)).padStart(2, '0')}:${String(toMin % 60).padStart(2, '0')}`;
+    const weekday = isoWeekday(date);
     const common = slotCommonFields(c, ws, { capacity: off.default_capacity, location: null, online: null, mode: '', visibility: 'inherit', status: 'published', buffer: off.buffer_min, preference: 'normal' }, { groupIds: [], membershipIds: [] });
-    const offeringSelect = html`<label>Angebot <select name="offering_id">${options(offerings.map((o) => ({ value: o.id, label: `${o.name} (${durationLabel(o.duration_min)})` })), off.id)}</select></label>`;
     return page(c, ws, 'slots', 'Slots anlegen', [
       errorBox(error),
-      pageHeader('Slots anlegen', `Alle Zeiten in ${ws.timezone}. Sommer- und Winterzeit werden automatisch berücksichtigt.`),
-      html`<div class="tabs" data-tabs>
-        <section class="card" id="single"><h2>Einzelner Termin oder Zeitfenster</h2>
-          <form method="post" action="/w/${ws.id}/slots" class="stack">
-            <div class="grid-form">
-              ${offeringSelect}
-              <fieldset class="span-all"><legend>Art</legend>
-                <label class="check"><input type="radio" name="kind" value="fixed" checked> Fester Termin (Beginn + Dauer)</label>
-                <label class="check"><input type="radio" name="kind" value="window"> Freies Zeitfenster – Buchende wählen ihre Wunschzeit (Dauer laut Angebot)</label>
-              </fieldset>
-              <label>Datum <input type="date" name="date" required value="${tomorrow}"></label>
-              <label>Beginn <input type="time" name="time" required step="300" value="16:00"></label>
-              <label>Dauer (Min.) – bei festen Terminen <input type="number" name="duration" min="5" max="1440" step="5" value="${off.duration_min}"></label>
-              <label>Ende – bei Zeitfenstern <input type="time" name="end_time" step="300" value="19:00"></label>
-            </div>
+      pageHeader('Slots anlegen', `Zeiten in ${ws.timezone}. Kunden können nur diese Termine buchen.`),
+      html`<section class="card"><form method="post" action="/w/${ws.id}/slots/series" class="stack">
+        <div class="grid-form">
+          <label class="span-all">Angebot <select name="offering_id">${options(offerings.map((o) => ({ value: o.id, label: `${o.name} (${durationLabel(o.duration_min)}${o.buffer_min ? ` + ${o.buffer_min} Min. Pause` : ''})` })), off.id)}</select></label>
+          <label>Am (bzw. ab) <input type="date" name="from" required value="${date}"></label>
+          <label>Bis (optional, für mehrere Wochen) <input type="date" name="to" min="${date}"></label>
+          <label>Uhrzeit von <input type="time" name="window_start" required step="300" value="${from}"></label>
+          <label>bis <input type="time" name="window_end" required step="300" value="${to}"></label>
+        </div>
+        <fieldset class="field weekdays"><legend>An diesen Wochentagen (nur wenn „Bis“ gesetzt)</legend>
+          ${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map((d, i) => html`<label class="check"><input type="checkbox" name="weekday" value="${i + 1}" ${checked(i + 1 === weekday)}> ${d}</label>`)}
+        </fieldset>
+        <p class="hint">Der Zeitraum wird automatisch in Termine mit der Dauer des Angebots aufgeteilt, z. B. 16:00–18:00 bei 60 Min. → 16:00 und 17:00. Überschneidungen mit vorhandenen Slots werden übersprungen.</p>
+        <details class="advanced"><summary>Weitere Einstellungen (Plätze, Ort, Farbe, Sichtbarkeit …)</summary>
+          <div class="stack">
+            <label>Abweichende Dauer je Termin (Min., leer = wie Angebot) <input type="number" name="duration" min="5" max="1440" step="5" placeholder="${off.duration_min}"></label>
             ${common}
-            <button class="btn" type="submit">Anlegen</button>
-          </form>
-        </section>
-        <section class="card" id="series"><h2>Serie für einen Zeitraum</h2>
-          <form method="post" action="/w/${ws.id}/slots/series" class="stack">
-            <div class="grid-form">
-              ${offeringSelect}
-              <fieldset class="span-all"><legend>Art</legend>
-                <label class="check"><input type="radio" name="kind" value="fixed" checked> Feste Termine nacheinander im Zeitfenster (Dauer + Puffer)</label>
-                <label class="check"><input type="radio" name="kind" value="window"> Ein freies Zeitfenster pro Tag</label>
-              </fieldset>
-              <label>Von <input type="date" name="from" required value="${tomorrow}"></label>
-              <label>Bis <input type="date" name="to" required value="${addDays(tomorrow, 27)}"></label>
-              <label>Täglich ab <input type="time" name="window_start" required step="300" value="14:00"></label>
-              <label>bis <input type="time" name="window_end" required step="300" value="18:00"></label>
-              <label>Dauer je Termin (Min.) <input type="number" name="duration" min="5" max="1440" step="5" value="${off.duration_min}"></label>
-            </div>
-            <fieldset class="field weekdays"><legend>Wochentage</legend>
-              ${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map((d, i) => html`<label class="check"><input type="checkbox" name="weekday" value="${i + 1}" ${checked(i < 5)}> ${d}</label>`)}
-            </fieldset>
-            ${common}
-            <p class="hint">Höchstens 500 Slots auf einmal. Überschneidungen mit vorhandenen Slots werden übersprungen.</p>
-            <button class="btn" type="submit">Serie anlegen</button>
-          </form>
-        </section>
-      </div>`,
+          </div>
+        </details>
+        <button class="btn btn-large" type="submit">Slots anlegen</button>
+      </form></section>`,
     ]);
   };
 
@@ -896,8 +883,11 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     if (!off || off.archived_at) notFound();
     const kind = oneOf(str(f, 'kind'), ['fixed', 'window'] as const, 'fixed');
     const from = str(f, 'from', 10);
-    const to = str(f, 'to', 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return newSlotsPage(c, ws, 'Bitte Start- und Enddatum angeben.');
+    const single = !str(f, 'to', 10);
+    const to = single ? from : str(f, 'to', 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return newSlotsPage(c, ws, 'Bitte ein Datum angeben.');
+    let weekdays = list(f, 'weekday').map(Number).filter((n) => n >= 1 && n <= 7);
+    if (single) weekdays = [isoWeekday(from)];
     try {
       const r = await createSeries(
         db,
@@ -908,13 +898,14 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         {
           fromDate: from,
           toDate: to,
-          weekdays: list(f, 'weekday').map(Number).filter((n) => n >= 1 && n <= 7),
+          weekdays,
           windowStart: str(f, 'window_start', 5),
           windowEnd: str(f, 'window_end', 5),
         },
         readSlotInput(f, off, kind, int(f, 'duration', 5, 1440, off.duration_min)),
       );
-      return c.redirect(`/w/${ws.id}/slots?msg=bulk_done&n=${r.created}&k=${r.skipped}`, 303);
+      if (!r.created) return newSlotsPage(c, ws, r.skipped ? 'Keine neuen Slots: Alle Zeiten überschneiden sich mit vorhandenen Slots.' : 'Keine Slots angelegt – passt das Zeitfenster zur Dauer und sind Wochentage gewählt?');
+      return c.redirect(`/w/${ws.id}/calendar?week=${from}&msg=slots_created&n=${r.created}&k=${r.skipped}`, 303);
     } catch (e) {
       if (e instanceof SlotError || e instanceof LocalTimeError) return newSlotsPage(c, ws, e.message);
       throw e;

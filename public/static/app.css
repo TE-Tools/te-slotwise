@@ -1168,3 +1168,51 @@ a.ev:focus-visible {
 .slot-reluctant {
   border-left: 5px solid var(--reluctant-border);
 }
+
+/* Klickbare Stunden im Anbieter-Kalender („hier Slots anlegen“) */
+.week-cell {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 0;
+  border-radius: 4px;
+}
+.week-cell:hover,
+.week-cell:focus-visible {
+  background: rgb(15 118 110 / 12%);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+.week-cell:hover::after {
+  content: '+ Slots anlegen';
+  position: absolute;
+  left: 0.35rem;
+  top: 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent-strong);
+}
+
+/* Anmeldeseite: Trenner „oder“ */
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+details.advanced {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem 0.9rem;
+  background: var(--surface-2);
+}
+details.advanced[open] > summary {
+  margin-bottom: 0.75rem;
+}

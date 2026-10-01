@@ -73,6 +73,8 @@ export function weekCalendar(o: {
   hrefFor: (weekStart: string) => string;
   dayHref?: (date: string) => string;
   legend?: { kind: WeekItemKind; label: string }[];
+  /** Klick auf eine leere Stunde (z. B. „hier Slots anlegen“). */
+  cellHref?: (date: string, hhmm: string) => string;
 }): H {
   const now = Date.now();
   const today = localDate(now, o.tz);
@@ -135,7 +137,15 @@ export function weekCalendar(o: {
           const entries = perDay.get(d)!;
           const bg = entries.filter((e) => e.item.background);
           const fg = placeDay(entries.filter((e) => !e.item.background));
+          const cells =
+            o.cellHref && d >= today
+              ? Array.from({ length: maxHour - minHour }, (_, i) => {
+                  const hh = String(minHour + i).padStart(2, '0');
+                  return html`<a class="week-cell" style="top:${i * HOUR_PX}px;height:${HOUR_PX}px" href="${o.cellHref!(d, `${hh}:00`)}" aria-label="Slots am ${fmtDay(d)} ab ${hh}:00 anlegen" title="Hier Slots anlegen (${hh}:00)"></a>`;
+                })
+              : '';
           return html`<div class="week-day ${d === today ? 'is-today' : ''} ${d < today ? 'is-past' : ''}" style="height:${height}px">
+            ${cells}
             ${bg.map((e) => event(e.item, y(e.top), y(e.bottom) - y(e.top), 0, 1, o.tz, true))}
             ${fg.map((p) => event(p.item, y(p.top), y(p.bottom) - y(p.top), p.lane, p.lanes, o.tz, false))}
             ${d === today && nowMin >= startMin && nowMin <= maxHour * 60 ? html`<div class="week-now" style="top:${y(nowMin)}px" aria-hidden="true"></div>` : ''}

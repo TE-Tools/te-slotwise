@@ -17,6 +17,8 @@ interface ViewCtx {
   bookedDisplay: BookedDisplay;
   base: string; // z. B. /w/:id/book oder /p/:token
   bookAction: (slotId: string) => string;
+  /** Seite zum Buchen eines einzelnen Slots (Klick im Wochenkalender). */
+  slotPage: (slotId: string) => string;
   loggedIn: boolean;
   loginHref: string;
 }
@@ -74,20 +76,20 @@ async function slotsView(c: Ctx, v: ViewCtx, membershipId: string | null, userId
   const now = Date.now();
   const today = localDate(now, tz);
   const rawView = c.req.query('view');
-  const view = rawView === 'calendar' ? 'calendar' : rawView === 'week' ? 'week' : 'list';
+  const view = rawView === 'calendar' ? 'calendar' : rawView === 'list' ? 'list' : 'week';
   const day = /^\d{4}-\d{2}-\d{2}$/.test(c.req.query('day') ?? '') ? c.req.query('day')! : null;
   const month = parseMonth(c.req.query('month'), day ?? today);
 
   const all = await listVisibleSlots(db, v.ws.id, membershipId, userId, { offeringId }, now);
   const busy = await busyTimes(db, v.ws.id, all.filter((s) => s.kind === 'window').map((s) => s.id));
   const q = (extra: Record<string, string>) => {
-    const p = new URLSearchParams({ ...(view !== 'list' ? { view } : {}), ...extra });
+    const p = new URLSearchParams({ ...(view !== 'week' ? { view } : {}), ...extra });
     return `${c.req.path}?${p}`;
   };
 
   const toggle = html`<div class="segmented" role="group" aria-label="Ansicht">
-    <a href="${c.req.path}?view=week" ${view === 'week' ? raw('aria-current="true"') : ''}>Woche</a>
-    <a href="${c.req.path}" ${view === 'list' ? raw('aria-current="true"') : ''}>Liste</a>
+    <a href="${c.req.path}" ${view === 'week' ? raw('aria-current="true"') : ''}>Woche</a>
+    <a href="${c.req.path}?view=list" ${view === 'list' ? raw('aria-current="true"') : ''}>Liste</a>
     <a href="${c.req.path}?view=calendar" ${view === 'calendar' ? raw('aria-current="true"') : ''}>Monat</a>
   </div>`;
 
@@ -103,9 +105,9 @@ async function slotsView(c: Ctx, v: ViewCtx, membershipId: string | null, userId
       items.push({
         start: Date.parse(sl.starts_at),
         end: Date.parse(sl.ends_at),
-        title: sl.my_status ? 'Deine Anfrage' : sl.kind === 'window' ? `${sl.offering_name} – Wunschzeit wählen` : sl.offering_name,
+        title: sl.my_status ? 'Deine Anfrage' : sl.offering_name,
         detail: sl.preference === 'reluctant' ? 'eher ungern, nur Anfrage' : sl.mode === 'auto' ? 'sofort buchbar' : 'auf Anfrage',
-        href: q({ day: d }) + `#s-${sl.id}`,
+        href: sl.kind === 'fixed' && !sl.my_status ? v.slotPage(sl.id) : sl.my_status ? '/bookings' : q({ view: 'list', day: d }) + `#s-${sl.id}`,
         kind: sl.my_status ? 'mine' : sl.preference === 'reluctant' ? 'reluctant' : 'free',
         background: sl.kind === 'window' && !sl.my_status,
       });
@@ -167,7 +169,7 @@ async function slotsView(c: Ctx, v: ViewCtx, membershipId: string | null, userId
           <ul class="slots">${items.map((s) => slotItem(s, v, busy.get(s.id) ?? []))}</ul></section>`,
       )}`
     : view !== 'list' && !day
-      ? html`<p class="muted">${view === 'week' ? 'Tippe auf einen grünen oder gelben Termin, um ihn zu buchen.' : 'Wähle einen markierten Tag, um die freien Termine zu sehen.'}</p>`
+      ? html`<p class="muted">${view === 'week' ? 'Auf einen grünen oder gelben Termin tippen, um ihn zu buchen.' : 'Wähle einen markierten Tag, um die freien Termine zu sehen.'}</p>`
       : emptyState('Gerade keine freien Termine', 'Sobald neue Termine freigegeben werden, erscheinen sie hier.');
 
   return html`<div class="toolbar">${toggle}<p class="muted">Alle Zeiten in ${tz}.</p></div>${calendar}${list}`;
@@ -202,7 +204,7 @@ export function registerBookRoutes(app: Hono<AppEnv>) {
           : '',
         slotsView(
           c,
-          { ws, bookedDisplay: ws.show_booked_members, base: `/w/${ws.id}/book`, bookAction: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login' },
+          { ws, bookedDisplay: ws.show_booked_members, base: `/w/${ws.id}/book`, bookAction: (id) => `/w/${ws.id}/slots/${id}/book`, slotPage: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login' },
           ws.membership_id,
           user.id,
         ),
@@ -230,7 +232,7 @@ export function registerBookRoutes(app: Hono<AppEnv>) {
         offering.location ? html`<p class="muted">Ort: ${offering.location}</p>` : '',
         slotsView(
           c,
-          { ws, bookedDisplay: ws.show_booked_members, base: c.req.path, bookAction: (id) => `/w/${ws.id}/slots/${id}/book?back=${encodeURIComponent(c.req.path)}`, loggedIn: true, loginHref: '/login' },
+          { ws, bookedDisplay: ws.show_booked_members, base: c.req.path, bookAction: (id) => `/w/${ws.id}/slots/${id}/book?back=${encodeURIComponent(c.req.path)}`, slotPage: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login' },
           ws.membership_id,
           user.id,
           offering.id,
@@ -238,6 +240,29 @@ export function registerBookRoutes(app: Hono<AppEnv>) {
         html`<details class="card"><summary>Diesen Link teilen</summary>${shareBox(`${config.appUrl}/w/${ws.id}/o/${offering.id}`, offering.name, 'Nur berechtigte Personen sehen nach der Anmeldung die Termine.')}</details>`,
       ],
     });
+  });
+
+  /** Ein einzelner Termin zum Buchen – Ziel beim Klick im Wochenkalender. */
+  const slotPageBody = async (c: Ctx, v: ViewCtx, membershipId: string | null, userId: string | null, backHref: string) => {
+    const { db } = c.get('deps');
+    const slot = (await listVisibleSlots(db, v.ws.id, membershipId, userId)).find((x) => x.id === c.req.param('sid'));
+    if (!slot) {
+      return [
+        flash(c.req.query('msg')),
+        emptyState('Dieser Termin ist nicht mehr frei', 'Er wurde inzwischen gebucht oder zurückgezogen.', html`<a class="btn" href="${backHref}">Andere Termine ansehen</a>`),
+      ];
+    }
+    return [
+      flash(c.req.query('msg')),
+      pageHeader(slot.mode === 'auto' ? 'Termin buchen' : 'Termin anfragen', v.ws.name),
+      html`<ul class="slots">${slotItem(slot, v, [])}</ul><p><a href="${backHref}">← Zurück zum Kalender</a></p>`,
+    ];
+  };
+
+  app.get('/w/:wid/slots/:sid/book', async (c) => {
+    const { user, ws } = await requireWs(c, 'book');
+    const v: ViewCtx = { ws, bookedDisplay: ws.show_booked_members, base: `/w/${ws.id}/book`, bookAction: (id) => `/w/${ws.id}/slots/${id}/book`, slotPage: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login' };
+    return render(c, { title: 'Termin buchen', ws, section: 'book', body: await slotPageBody(c, v, ws.membership_id, user.id, `/w/${ws.id}/book`) });
   });
 
   app.post('/w/:wid/slots/:sid/book', async (c) => {
@@ -279,13 +304,21 @@ export function registerBookRoutes(app: Hono<AppEnv>) {
         pageHeader(ws.name, ws.description || 'Freie Termine'),
         slotsView(
           c,
-          { ws, bookedDisplay: ws.show_booked_public, base: path, bookAction: (id) => `${path}/slots/${id}/book`, loggedIn: !!user, loginHref: `/login?next=${encodeURIComponent(path)}` },
+          { ws, bookedDisplay: ws.show_booked_public, base: path, bookAction: (id) => `${path}/slots/${id}/book`, slotPage: (id) => `${path}/slots/${id}/book`, loggedIn: !!user, loginHref: `/login?next=${encodeURIComponent(path)}` },
           null,
           user?.id ?? null,
         ),
         html`<details class="card"><summary>Seite teilen</summary>${shareBox(`${config.appUrl}${path}`, ws.name)}</details>`,
       ],
     });
+  });
+
+  app.get('/p/:token/slots/:sid/book', async (c) => {
+    const ws = await publicWs(c);
+    const user = c.get('user');
+    const path = `/p/${c.req.param('token')}`;
+    const v: ViewCtx = { ws, bookedDisplay: ws.show_booked_public, base: path, bookAction: (id) => `${path}/slots/${id}/book`, slotPage: (id) => `${path}/slots/${id}/book`, loggedIn: !!user, loginHref: `/login?next=${encodeURIComponent(c.req.path)}` };
+    return render(c, { title: 'Termin buchen', body: await slotPageBody(c, v, null, user?.id ?? null, path) });
   });
 
   app.post('/p/:token/slots/:sid/book', async (c) => {

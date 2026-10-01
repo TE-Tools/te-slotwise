@@ -4,12 +4,12 @@
 
 Enthalten:
 
-- Anmeldung/Registrierung per E-Mail-Link (ohne Passwort), Profil, Benachrichtigungseinstellungen, Datenexport, Kontolöschung
+- Anmeldung/Registrierung per E-Mail-Link; danach optional **Passwort** (PBKDF2-SHA-256, Sperre nach 8 Fehlversuchen für 15 Min.). Der E-Mail-Link dient zugleich als „Passwort vergessen“. Profil, Benachrichtigungseinstellungen, Datenexport, Kontolöschung
 - Arbeitsbereiche (persönlich oder Organisation), Mitglieder mit Rollen, Wechsel zwischen Bereichen
 - Einladungen per E-Mail (Bereich, Gruppe oder Angebot), erneut senden, widerrufen, 7 Tage gültig
 - Gruppen mit frei wählbaren Namen
 - Angebote mit Dauer, Puffer, Ort, Online-Info, Plätzen und Buchungsregeln
-- Slots: **feste Termine** und **freie Zeitfenster** (Buchende wählen eine Wunschzeit), einzeln oder als Serie
+- Slots: **feste, vorgegebene Termine** über ein einfaches Formular (Datum, optional „bis“ + Wochentage, Uhrzeit von–bis → automatisch in Termine der Angebotsdauer aufgeteilt) oder per Klick auf eine Uhrzeit im Wochenkalender. Buchende können nur diese Termine buchen. (Freie Zeitfenster mit Wunschzeit sind technisch noch vorhanden, werden aber nicht mehr angeboten.)
 - Sichtbarkeit pro Angebot oder Slot: öffentlich, ausgewählte Gruppen/Personen, intern
 - Buchung mit manueller oder automatischer Bestätigung, Schutz gegen Doppelbuchung
 - **Verschieben mit Gegenbestätigung**: Jede Seite kann eine andere Zeit vorschlagen; fix ist ein Termin erst, wenn beide zugestimmt haben
@@ -110,8 +110,8 @@ werden abgelehnt (bei Serien übersprungen), doppelte Uhrzeiten nehmen die früh
    **Manuelle Bestätigung**: `angefragt`. Mehrere – auch überlappende – Anfragen sind erlaubt, solange
    „Offene Anfragen blockieren die Zeit“ ausgeschaltet ist (Standard).
 3. Die Anbieterseite kann bestätigen, ablehnen, absagen oder **eine andere Zeit vorschlagen**.
-4. Buchende können eine offene Anfrage zurückziehen oder ihre Wunschzeit ändern; bei festen
-   Terminen schlagen sie eine andere Zeit vor.
+4. Buchende können eine offene Anfrage zurückziehen oder auf einen anderen **freien vorgegebenen Slot** wechseln;
+   bei festen Terminen schlagen sie einen anderen freien Slot vor. Freie Uhrzeiten können nur Anbieter vorschlagen.
 5. Ein Vorschlag wird erst wirksam, wenn **die andere Seite zustimmt**. Bei festen Terminen gilt bis
    dahin die alte Zeit; Ablehnen verwirft den Vorschlag.
 6. Absage durch Buchende: direkt, wenn erlaubt und vor der Frist – sonst als „Absage angefragt“.

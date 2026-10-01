@@ -7,6 +7,7 @@ import {
   consumeLoginToken,
   createLoginToken,
   destroySession,
+  loginWithPassword,
   normalizeEmail,
   peekLoginToken,
   recentLoginTokenCount,
@@ -19,16 +20,23 @@ import { render } from './common.ts';
 
 function loginForm(next: string | null, email = '', error?: string) {
   return html`<section class="card narrow">
-    <h1>Anmelden oder registrieren</h1>
-    <p class="lead">Gib deine E-Mail-Adresse ein. Du bekommst einen Anmeldelink – ein Passwort brauchst du nicht. Ein Konto wird beim ersten Anmelden automatisch angelegt.</p>
+    <h1>Anmelden</h1>
+    <p class="lead">Mit E-Mail und Passwort anmelden. Noch kein Konto oder kein Passwort? Dann lass dir einen Anmeldelink schicken – das Konto wird dabei angelegt, und danach kannst du im Profil ein Passwort festlegen.</p>
     ${errorBox(error)}
     <form method="post" action="/login" class="stack">
       <input type="hidden" name="next" value="${next ?? ''}">
       <div class="field">
         <label for="email">E-Mail-Adresse</label>
-        <input id="email" name="email" type="email" autocomplete="email" required maxlength="254" value="${email}">
+        <input id="email" name="email" type="email" autocomplete="username" required maxlength="254" value="${email}">
       </div>
-      <button class="btn" type="submit">Anmeldelink anfordern</button>
+      <div class="field">
+        <label for="password">Passwort</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" maxlength="200">
+      </div>
+      <button class="btn" type="submit" name="mode" value="password">Anmelden</button>
+      <div class="divider"><span>oder</span></div>
+      <button class="btn btn-secondary" type="submit" name="mode" value="link">Anmeldelink per E-Mail senden</button>
+      <p class="hint">Der Anmeldelink funktioniert auch, wenn du dein Passwort vergessen hast.</p>
     </form>
   </section>`;
 }
@@ -84,6 +92,16 @@ export async function startLogin(c: Ctx, email: string, next: string | null, sho
   });
 }
 
+export function setSessionCookie(c: Ctx, token: string) {
+  setCookie(c, SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure: c.get('deps').config.cookieSecure,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: Math.floor(SESSION_TTL_MS / 1000),
+  });
+}
+
 export function registerAuthRoutes(app: Hono<AppEnv>) {
   app.get('/login', async (c) => {
     if (c.get('user')) return c.redirect(safeNextPath(c.req.query('next')) ?? '/dashboard');
@@ -96,7 +114,29 @@ export function registerAuthRoutes(app: Hono<AppEnv>) {
     const email = normalizeEmail(str(f, 'email', 300));
     if (!email) return render(c, { title: 'Anmelden', body: loginForm(next, str(f, 'email', 300), 'Bitte eine gültige E-Mail-Adresse eingeben.') }, 400);
 
-    return startLogin(c, email, next);
+    const password = typeof f.password === 'string' ? f.password : '';
+    // Ohne Passwort (oder ausdrücklich gewünscht): Anmeldelink per E-Mail.
+    if (str(f, 'mode') === 'link' || !password) {
+      if (str(f, 'mode') !== 'link' && !password) {
+        return render(c, { title: 'Anmelden', body: loginForm(next, email, 'Bitte Passwort eingeben – oder „Anmeldelink per E-Mail senden“ wählen.') }, 400);
+      }
+      return startLogin(c, email, next);
+    }
+
+    const { db, config, limiter } = c.get('deps');
+    if (!limiter.take(`pw-ip:${clientIp(c, config.trustProxy)}`, 20, 15 * 60_000)) {
+      return render(c, { title: 'Anmelden', body: loginForm(next, email, 'Zu viele Anmeldeversuche. Bitte warte 15 Minuten.') }, 429);
+    }
+    const result = await loginWithPassword(db, email, password.slice(0, 200));
+    if (!result.ok) {
+      const msg =
+        result.reason === 'locked'
+          ? 'Zu viele Fehlversuche – das Konto ist für 15 Minuten gesperrt. Mit dem Anmeldelink per E-Mail kommst du sofort hinein.'
+          : 'E-Mail-Adresse oder Passwort stimmen nicht. Noch kein Passwort festgelegt? Dann nutze den Anmeldelink.';
+      return render(c, { title: 'Anmelden', body: loginForm(next, email, msg) }, 400);
+    }
+    setSessionCookie(c, result.sessionToken);
+    return c.redirect(next ?? '/dashboard', 303);
   });
 
   // Der Link aus der E-Mail führt zuerst auf eine Bestätigungsseite. So verbrauchen
@@ -129,13 +169,7 @@ export function registerAuthRoutes(app: Hono<AppEnv>) {
     const f = await readForm(c);
     const result = await consumeLoginToken(db, str(f, 'token', 200));
     if (!result) return c.redirect('/auth/verify?token=invalid', 303);
-    setCookie(c, SESSION_COOKIE, result.sessionToken, {
-      httpOnly: true,
-      secure: config.cookieSecure,
-      sameSite: 'Lax',
-      path: '/',
-      maxAge: Math.floor(SESSION_TTL_MS / 1000),
-    });
+    setSessionCookie(c, result.sessionToken);
     const next = safeNextPath(result.nextPath) ?? '/dashboard';
     if (!result.user.display_name) return c.redirect(`/profile?setup=1&next=${encodeURIComponent(next)}`, 303);
     return c.redirect(next, 303);

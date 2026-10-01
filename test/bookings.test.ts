@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { bookerAction, listWorkspaceBookings, proposeTime, providerDecision, requestBooking, respondToProposal } from '../src/services/bookings.ts';
+import { bookerAction, listWorkspaceBookings, proposeSlot, proposeTime, providerDecision, requestBooking, respondToProposal } from '../src/services/bookings.ts';
 import { getOffering, saveOffering } from '../src/services/offerings.ts';
 import { createSeries, createSlot, listVisibleSlots, type SlotInput } from '../src/services/slots.ts';
 import { localToUtc } from '../src/time.ts';
@@ -194,4 +194,31 @@ test('Serie: feste Slots nacheinander, Zeitfenster einmal pro Tag', async () => 
   assert.equal(r.created, 7 * 4); // 14:00, 15:00, 16:00, 17:00
   const w = await createSeries(db, wsId, owner.id, off, 'Europe/Berlin', { fromDate: futureDate(20), toDate: futureDate(22), weekdays: [1, 2, 3, 4, 5, 6, 7], windowStart: '16:00', windowEnd: '19:00' }, slotInput({ kind: 'window', durationMin: 45 }));
   assert.equal(w.created, 3);
+});
+
+test('Buchende wählen nur vorgegebene Slots: Wechsel bei Anfrage sofort, bei festem Termin als Vorschlag', async () => {
+  const db = await freshDb();
+  const { wsId, offeringId, owner } = await setupWorkspace(db);
+  const off = (await getOffering(db, wsId, offeringId))!;
+  const s1 = await createSlot(db, wsId, off, 'Europe/Berlin', futureDate(), '10:00', slotInput());
+  const s2 = await createSlot(db, wsId, off, 'Europe/Berlin', futureDate(), '12:00', slotInput());
+  const a = await makeUser(db, 'a@example.com');
+  const r = await requestBooking(db, APP, { workspaceId: wsId, slotId: s1, userId: a.id, membershipId: null, note: '' });
+  assert.ok(r.ok);
+  // Anfrage: direkter Wechsel auf s2
+  assert.equal(await proposeSlot(db, APP, a.id, null, r.bookingId, s2), 'ok');
+  let row = (await listWorkspaceBookings(db, wsId, { id: r.bookingId }))[0];
+  assert.equal(row.slot_id, s2);
+  assert.equal(row.status, 'requested');
+  // Bestätigt → Wechsel zurück auf s1 nur als Vorschlag
+  assert.equal(await providerDecision(db, APP, wsId, r.bookingId, owner.id, 'confirm'), 'ok');
+  assert.equal(await proposeSlot(db, APP, a.id, null, r.bookingId, s1), 'ok');
+  row = (await listWorkspaceBookings(db, wsId, { id: r.bookingId }))[0];
+  assert.equal(row.slot_id, s2, 'bis zur Zustimmung gilt der alte Termin');
+  assert.equal(await respondToProposal(db, APP, 'provider', { wsId, userId: owner.id }, r.bookingId, true), 'ok');
+  row = (await listWorkspaceBookings(db, wsId, { id: r.bookingId }))[0];
+  assert.equal(row.slot_id, s1);
+  assert.equal(row.status, 'confirmed');
+  // Fremder/unsichtbarer Slot wird abgelehnt
+  assert.equal(await proposeSlot(db, APP, a.id, null, r.bookingId, 'gibt-es-nicht'), 'not_found');
 });

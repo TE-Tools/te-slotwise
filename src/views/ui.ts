@@ -44,6 +44,12 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   proposal_rejected: { text: 'Vorschlag abgelehnt. Es gilt die bisherige Zeit.', kind: 'info' },
   proposal_conflict: { text: 'Die vorgeschlagene Zeit überschneidet sich mit einem festen Termin. Bitte eine andere Zeit wählen.', kind: 'error' },
   bad_time: { text: 'Ungültige Zeit: Bitte Datum, Uhrzeit und Dauer prüfen (in der Zukunft, im angebotenen Zeitfenster, in 5-Minuten-Schritten).', kind: 'error' },
+  password_saved: { text: 'Passwort gespeichert. Du kannst dich jetzt mit E-Mail und Passwort anmelden.', kind: 'ok' },
+  password_weak: { text: 'Das Passwort ist zu kurz (mindestens 10 Zeichen).', kind: 'error' },
+  password_mismatch: { text: 'Die beiden Passwörter stimmen nicht überein.', kind: 'error' },
+  password_wrong: { text: 'Das aktuelle Passwort stimmt nicht.', kind: 'error' },
+  slots_created: { text: 'Slots angelegt.', kind: 'ok' },
+  slot_switched: { text: 'Deine Anfrage gilt jetzt für den neuen Termin und wartet auf Bestätigung.', kind: 'ok' },
   confirm_mismatch: { text: 'Die Bestätigung stimmt nicht überein – nichts wurde gelöscht.', kind: 'error' },
 };
 
