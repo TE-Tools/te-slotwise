@@ -12,6 +12,7 @@ export type Permission =
   | 'slots.manage'
   | 'bookings.manage'
   | 'notifications.manage'
+  | 'billing.manage' // Schülerübersicht: Preise, Anwesenheit, Zahlungen
   | 'book';
 
 const ALL: Permission[] = [
@@ -23,6 +24,7 @@ const ALL: Permission[] = [
   'slots.manage',
   'bookings.manage',
   'notifications.manage',
+  'billing.manage',
   'book',
 ];
 

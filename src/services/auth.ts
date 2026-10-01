@@ -12,11 +12,15 @@ export interface User {
   /** Gesetzt, wenn die Person ein Passwort festgelegt hat (nie an den Browser geben). */
   password_hash: string | null;
   created_at: string;
+  /** Die aktuelle Sitzung entstand vor Kurzem per E-Mail-Link (erlaubt „Passwort vergessen“). */
+  recent_link_login?: boolean;
 }
 
 export const LOGIN_TOKEN_TTL_MS = 15 * 60_000;
 export const SESSION_TTL_MS = 30 * 24 * 3600_000;
 export const SESSION_COOKIE = 'sw_session';
+/** So lange nach einer Anmeldung per E-Mail-Link darf ein neues Passwort ohne das alte gesetzt werden. */
+export const PASSWORD_RESET_WINDOW_MS = 30 * 60_000;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -67,28 +71,29 @@ export async function consumeLoginToken(db: Db, token: string, now = Date.now())
     } else if (!user.email_verified_at) {
       await db.run(`UPDATE users SET email_verified_at = ? WHERE id = ?`, [nowIso(now), user.id]);
     }
-    const session = await createSession(db, user.id, now);
+    const session = await createSession(db, user.id, now, true);
     return { user, sessionToken: session, nextPath: row.next_path };
   });
 }
 
-export async function createSession(db: Db, userId: string, now = Date.now()) {
+export async function createSession(db: Db, userId: string, now = Date.now(), viaLink = false) {
   const token = newToken();
-  await db.run(`INSERT INTO sessions (id, token_hash, user_id, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)`, [
+  await db.run(`INSERT INTO sessions (id, token_hash, user_id, created_at, expires_at, last_seen_at, via_link) VALUES (?, ?, ?, ?, ?, ?, ?)`, [
     newId(),
     hashToken(token),
     userId,
     nowIso(now),
     nowIso(now + SESSION_TTL_MS),
     nowIso(now),
+    viaLink ? 1 : 0,
   ]);
   return token;
 }
 
 export async function userForSession(db: Db, token: string | undefined, now = Date.now()): Promise<User | null> {
   if (!token || token.length > 100) return null;
-  const row = await db.get<User & { session_id: string; last_seen_at: string }>(
-    `SELECT u.*, s.id AS session_id, s.last_seen_at FROM sessions s JOIN users u ON u.id = s.user_id
+  const row = await db.get<User & { session_id: string; last_seen_at: string; session_created_at: string; via_link: number }>(
+    `SELECT u.*, s.id AS session_id, s.last_seen_at, s.created_at AS session_created_at, s.via_link FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ? AND s.expires_at > ? AND u.deleted_at IS NULL`,
     [hashToken(token), nowIso(now)],
   );
@@ -97,8 +102,8 @@ export async function userForSession(db: Db, token: string | undefined, now = Da
   if (now - Date.parse(row.last_seen_at) > 3600_000) {
     await db.run(`UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?`, [nowIso(now), nowIso(now + SESSION_TTL_MS), row.session_id]);
   }
-  const { session_id: _s, last_seen_at: _l, ...user } = row;
-  return user;
+  const { session_id: _s, last_seen_at: _l, session_created_at: created, via_link: viaLink, ...user } = row;
+  return { ...user, recent_link_login: !!viaLink && now - Date.parse(created) < PASSWORD_RESET_WINDOW_MS };
 }
 
 export async function destroySession(db: Db, token: string | undefined) {
@@ -178,7 +183,8 @@ export async function exportUserData(db: Db, userId: string) {
     [userId],
   );
   const bookings = await db.all(
-    `SELECT w.name AS workspace, o.name AS offering, b.starts_at, b.ends_at, s.timezone, b.status, b.note, b.created_at
+    `SELECT w.name AS workspace, o.name AS offering, b.starts_at, b.ends_at, s.timezone, b.status, b.note, b.created_at,
+       b.attendance, b.price_cents, b.paid_cents, b.paid_at
      FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN offerings o ON o.id = b.offering_id
      JOIN workspaces w ON w.id = b.workspace_id WHERE b.user_id = ? ORDER BY b.starts_at`,
     [userId],

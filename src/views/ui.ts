@@ -51,6 +51,10 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   slots_created: { text: 'Slots angelegt.', kind: 'ok' },
   slot_switched: { text: 'Deine Anfrage gilt jetzt für den neuen Termin und wartet auf Bestätigung.', kind: 'ok' },
   confirm_mismatch: { text: 'Die Bestätigung stimmt nicht überein – nichts wurde gelöscht.', kind: 'error' },
+  money_invalid: { text: 'Ungültiger Betrag – bitte z. B. 25 oder 25,50 eingeben. Nichts wurde gespeichert.', kind: 'error' },
+  lessons_saved: { text: 'Gespeichert.', kind: 'ok' },
+  lesson_added: { text: 'Termin eingetragen.', kind: 'ok' },
+  lesson_full: { text: 'Zu dieser Zeit gibt es schon einen festen Termin dieses Angebots. Bitte eine andere Zeit wählen.', kind: 'error' },
 };
 
 export function flash(code: string | undefined, extra?: string): H | '' {
@@ -82,6 +86,7 @@ function wsNav(ws: NonNullable<LayoutOpts['ws']>, section?: string) {
     ['book', 'Termine buchen', can(ws.role, 'book')],
     ['slots', 'Slots', can(ws.role, 'slots.manage')],
     ['bookings', 'Buchungen', can(ws.role, 'bookings.manage')],
+    ['students', 'Schüler', can(ws.role, 'billing.manage')],
     ['offerings', 'Angebote', can(ws.role, 'offerings.manage')],
     ['groups', 'Gruppen', can(ws.role, 'groups.manage')],
     ['members', 'Mitglieder', can(ws.role, 'members.manage')],

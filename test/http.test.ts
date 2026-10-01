@@ -278,3 +278,77 @@ test('Passwort: Sperre nach zu vielen Fehlversuchen', async () => {
   const locked = await x.req('/login', { method: 'POST', form: { email: 'lock@example.com', password: 'richtiges-pw-1', mode: 'password' } });
   assert.match(await locked.text(), /gesperrt/);
 });
+
+test('Passwort vergessen: nach Anmeldelink neues Passwort ohne das alte setzen', async () => {
+  const { app, mailer } = await setup();
+  const c = await login(app, mailer, 'vergessen@example.com', 'Vergesslich');
+  await c.req('/profile/password', { method: 'POST', form: { new_password: 'altes-passwort-1', new_password2: 'altes-passwort-1' } });
+  // Neues Gerät: „Passwort vergessen?“ schickt einen Link, der zum Profil führt.
+  const x = client(app);
+  const r = await x.req('/login', { method: 'POST', form: { email: 'vergessen@example.com', mode: 'forgot' } });
+  assert.equal(r.status, 200);
+  const token = /token=([A-Za-z0-9_-]+)/.exec(mailer.sent.at(-1)!.text)![1];
+  const v = await x.req('/auth/verify', { method: 'POST', form: { token } });
+  assert.equal(v.headers.get('location'), '/profile?reset=1');
+  const page = await (await x.req('/profile?reset=1')).text();
+  assert.doesNotMatch(page, /current_password/);
+  const ok = await x.req('/profile/password', { method: 'POST', form: { new_password: 'neues-passwort-2', new_password2: 'neues-passwort-2' } });
+  assert.match(ok.headers.get('location')!, /password_saved/);
+  const y = client(app);
+  const good = await y.req('/login', { method: 'POST', form: { email: 'vergessen@example.com', password: 'neues-passwort-2', mode: 'password' } });
+  assert.equal(good.status, 303);
+  // Mit Passwort angemeldet: Ändern braucht weiterhin das aktuelle Passwort.
+  const no = await y.req('/profile/password', { method: 'POST', form: { new_password: 'drittes-passwort', new_password2: 'drittes-passwort' } });
+  assert.match(no.headers.get('location')!, /password_wrong/);
+});
+
+test('Schülerübersicht: nur für Verwaltende, Abhaken, Preise, Zahlungen und CSV', async () => {
+  const { app, mailer, db } = await setup();
+  const owner = await login(app, mailer, 'lehrer@example.com', 'Lehrer');
+  const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Musik', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
+  const off = await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Stunde', duration_min: '45', confirmation_mode: 'manual', visibility: 'internal' } });
+  const offId = /offerings\/([^?]+)/.exec(off.headers.get('location')!)![1];
+  const student = await login(app, mailer, 'kind@example.com', 'Kind');
+  const studentId = (await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'kind@example.com'`))!.id;
+  await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES ('m-kind', ?, ?, 'member', ?)`, [wsId, studentId, new Date().toISOString()]);
+  // Mitglieder sehen die Abrechnung nicht.
+  assert.equal((await student.req(`/w/${wsId}/students`)).status, 404);
+  assert.equal((await student.req(`/w/${wsId}/students/export.csv`)).status, 404);
+
+  // Standardpreis 40 € pro 60 Minuten → 45 Minuten = 30 €.
+  await owner.req(`/w/${wsId}/students/settings`, { method: 'POST', form: { default_price: '40', price_unit: 'hour' } });
+  assert.match((await owner.req(`/w/${wsId}/students/settings`, { method: 'POST', form: { default_price: 'abc', price_unit: 'hour' } })).headers.get('location')!, /money_invalid/);
+  const add = async (date: string) =>
+    owner.req(`/w/${wsId}/students/${studentId}/lessons`, { method: 'POST', form: { offering_id: offId, date, time: '15:00', duration: '' } });
+  assert.match((await add('2026-01-05')).headers.get('location')!, /lesson_added/);
+  assert.match((await add('2026-01-12')).headers.get('location')!, /lesson_added/);
+  // Doppelt zur selben Zeit geht nicht.
+  assert.doesNotMatch((await add('2026-01-12')).headers.get('location')!, /lesson_added/);
+
+  const ids = (await db.all<{ id: string }>(`SELECT id FROM bookings WHERE user_id = ? ORDER BY starts_at`, [studentId])).map((r) => r.id);
+  const page = await (await owner.req(`/w/${wsId}/students/${studentId}?month=2026-01`)).text();
+  assert.match(page, /30,00/);
+  const save = await owner.req(`/w/${wsId}/lessons`, {
+    method: 'POST',
+    form: { back: `/w/${wsId}/students/${studentId}?month=2026-01`, ids: ids[0], [`att_${ids[0]}`]: 'attended', [`price_${ids[0]}`]: '30,00', [`paid_${ids[0]}`]: '30' },
+  });
+  assert.match(save.headers.get('location')!, new RegExp(`/w/${wsId}/students/${studentId}\\?month=2026-01&msg=lessons_saved`));
+  // Zweiten Termin per Sammelaktion abhaken; danach Preis erhöhen – der festgeschriebene Preis bleibt.
+  const p2 = new URLSearchParams({ back: `/w/${wsId}/students`, bulk: 'attended' });
+  p2.append('ids', ids[1]);
+  await owner.req(`/w/${wsId}/lessons`, { method: 'POST', form: Object.fromEntries(p2) });
+  await owner.req(`/w/${wsId}/students/${studentId}/rate`, { method: 'POST', form: { price: '80' } });
+  const rows = await db.all<{ attendance: string; price_cents: number; paid_cents: number }>(`SELECT attendance, price_cents, paid_cents FROM bookings WHERE user_id = ? ORDER BY starts_at`, [studentId]);
+  assert.deepEqual(rows.map((r) => ({ ...r })), [
+    { attendance: 'attended', price_cents: 3000, paid_cents: 3000 },
+    { attendance: 'attended', price_cents: 3000, paid_cents: 0 },
+  ]);
+  const overview = await (await owner.req(`/w/${wsId}/students?year=2026`)).text();
+  assert.match(overview, /60,00\s*€/); // berechnet
+  assert.match(overview, /individuell/);
+  const csv = await (await owner.req(`/w/${wsId}/students/export.csv?month=2026-01`)).text();
+  assert.match(csv, /2026-01-05;15:00;15:45;45;Kind;kind@example.com;Stunde;fest;Stattgefunden;30,00;30,00;30,00/);
+  // Fremde Rücksprungziele werden ignoriert.
+  const evil = await owner.req(`/w/${wsId}/lessons`, { method: 'POST', form: { back: 'https://evil.example/', ids: ids[1], [`att_${ids[1]}`]: 'attended', [`price_${ids[1]}`]: '30', [`paid_${ids[1]}`]: '' } });
+  assert.match(evil.headers.get('location')!, new RegExp(`^/w/${wsId}/students\\?msg=`));
+});

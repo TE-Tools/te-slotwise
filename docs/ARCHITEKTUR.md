@@ -4,7 +4,7 @@
 
 Enthalten:
 
-- Anmeldung/Registrierung per E-Mail-Link; danach optional **Passwort** (PBKDF2-SHA-256, Sperre nach 8 Fehlversuchen für 15 Min.). Der E-Mail-Link dient zugleich als „Passwort vergessen“. Profil, Benachrichtigungseinstellungen, Datenexport, Kontolöschung
+- Anmeldung/Registrierung per E-Mail-Link; danach optional **Passwort** (PBKDF2-SHA-256, Sperre nach 8 Fehlversuchen für 15 Min.). „Passwort vergessen?“ schickt einen Anmeldelink; innerhalb von 30 Minuten danach lässt sich ein neues Passwort ohne das alte setzen. Profil, Benachrichtigungseinstellungen, Datenexport, Kontolöschung
 - Arbeitsbereiche (persönlich oder Organisation), Mitglieder mit Rollen, Wechsel zwischen Bereichen
 - Einladungen per E-Mail (Bereich, Gruppe oder Angebot), erneut senden, widerrufen, 7 Tage gültig
 - Gruppen mit frei wählbaren Namen
@@ -19,8 +19,9 @@ Enthalten:
 - Impressum und Datenschutzseite aus Betreiberangaben, automatische Löschfristen
 - E-Mail-Benachrichtigungen mit Versandprotokoll und erneutem Versand
 - Teilen per Web Share API und „Link kopieren“
+- **Schüler & Abrechnung** (`/w/:id/students`, nur Eigentümer:in/Admin): Standardpreis (pro Termin oder pro 60 Minuten) und individuelle Preise pro Person; nach dem Termin abhaken (stattgefunden / gefehlt, wird berechnet / ausgefallen) – auch direkt aus dem Kalender; bezahlter Betrag pro Termin; Monats- und Jahresübersicht pro Person und gesamt; CSV-Export; Termine für eine Person nachtragen oder einplanen
 
-Nicht enthalten (architektonisch vorbereitet, siehe unten): Zahlungen/Tarife, Kalender-Synchronisierung,
+Nicht enthalten (architektonisch vorbereitet, siehe unten): Online-Zahlung, Rechnungen/Quittungen als PDF, Kalender-Synchronisierung,
 automatisch wiederkehrende Verfügbarkeiten, Teilnehmerlisten-Funktionen, weitere Kanäle (SMS, Push),
 Mehrsprachigkeit, Kontaktimport, WhatsApp-Automatisierung.
 
@@ -98,6 +99,8 @@ Module:
 | `bookings` | Buchung mit **eigener Zeit** (`starts_at`/`ends_at`), Status, offenem Zeitvorschlag (`proposed_*`, `proposed_by`) |
 | `booking_events` | Statushistorie und Änderungen |
 | `notifications` | Outbox mit Versandstatus, Versuchen, Fehlertext |
+| `student_rates` | Individueller Preis pro Person und Bereich (sonst `workspaces.default_price_cents` / `price_unit`) |
+| `bookings.attendance`, `price_cents`, `paid_cents`, `paid_at` | Abhaken nach dem Termin; Preis wird beim Abhaken festgeschrieben |
 
 Zeiten werden als UTC-ISO-Text gespeichert, die IANA-Zeitzone steht am Bereich und am Slot.
 Lokale Eingaben werden einzeln umgerechnet; in der Zeitumstellung nicht existierende Uhrzeiten
@@ -134,7 +137,7 @@ ohne Link. Weitere Kanäle implementieren die Schnittstelle `Mailer` bzw. erweit
 
 ## Erweiterbarkeit
 
-- **Bezahlung/Tarife**: eigene Tabellen (z. B. `subscriptions`, `invoices`) mit `workspace_id` bzw. `user_id`; keine Änderung am Buchungskern nötig. Preise/Anbieter sind bewusst offen.
+- **Abrechnung**: Preise, Anwesenheit und Zahlungen sind umgesetzt (`src/services/billing.ts`, `src/routes/students.ts`). Rechnungen oder Online-Zahlung wären eigene Tabellen (z. B. `invoices`) mit Verweis auf die Buchungen.
 - **Mehrere Mitarbeitende**: Rolle `staff` ist nutzbar; als Nächstes ein optionales `slots.host_membership_id` (wer den Termin gibt).
 - **Gruppentermine**: Kapazität > 1 funktioniert bereits; Teilnehmerlisten sind eine reine Ansicht auf `bookings`.
 - **Kalender-Sync**: ICS-Export pro Person/Bereich aus `bookings` ableitbar.

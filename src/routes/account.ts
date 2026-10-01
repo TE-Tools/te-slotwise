@@ -127,7 +127,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
         <h2>Verantwortlich</h2>
         ${operatorBlock(c)}
         <h2>Welche Daten wir verarbeiten</h2>
-        <p>TE-Slotwise speichert nur, was für Terminbuchungen nötig ist: E-Mail-Adresse, Anzeigename, Mitgliedschaften und Gruppenzugehörigkeiten, Buchungen samt Verlauf und Nachrichten sowie den Versandstatus von E-Mail-Benachrichtigungen. Passwörter gibt es nicht; die Anmeldung erfolgt über einmalige Links per E-Mail. Es gibt keine Werbe- oder Analyse-Cookies und keine Inhalte von Drittanbietern. Ein technisch notwendiges Cookie hält die Anmeldung aufrecht.</p>
+        <p>TE-Slotwise speichert nur, was für Terminbuchungen nötig ist: E-Mail-Adresse, Anzeigename, Mitgliedschaften und Gruppenzugehörigkeiten, Buchungen samt Verlauf und Nachrichten, bei Unterrichtsangeboten Anwesenheit, Preise und Zahlungen pro Termin, sowie den Versandstatus von E-Mail-Benachrichtigungen. Die Anmeldung erfolgt über einmalige Links per E-Mail oder – wenn du eines festlegst – mit Passwort. Passwörter werden nur als gesalzener, nicht umkehrbarer Hash (PBKDF2) gespeichert, nie im Klartext. Es gibt keine Werbe- oder Analyse-Cookies und keine Inhalte von Drittanbietern. Ein technisch notwendiges Cookie hält die Anmeldung aufrecht.</p>
         <h2>Zweck und Rechtsgrundlage</h2>
         <p>Die Daten werden verarbeitet, um Termine anzubieten, zu buchen und darüber zu informieren (Vertragserfüllung bzw. vorvertragliche Maßnahmen, Art. 6 Abs. 1 lit. b DSGVO) sowie zur sicheren Bereitstellung des Dienstes (berechtigtes Interesse, Art. 6 Abs. 1 lit. f DSGVO).</p>
         <h2>Wer die Daten sieht</h2>
@@ -230,10 +230,18 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     const user = requireUser(c);
     const setup = c.req.query('setup') === '1';
     const next = safeNextPath(c.req.query('next')) ?? '';
+    // Nach „Passwort vergessen“ (frische Anmeldung per Link) ist das alte Passwort nicht nötig.
+    const needCurrent = !!user.password_hash && !user.recent_link_login;
+    const reset = c.req.query('reset') === '1';
     return render(c, {
       title: 'Profil',
       body: [
         flash(c.req.query('msg')),
+        reset && !setup
+          ? user.recent_link_login
+            ? html`<div class="flash flash-info" role="status">Du bist per E-Mail-Link angemeldet. Lege unten jetzt ein neues Passwort fest – das alte brauchst du dafür nicht.</div>`
+            : html`<div class="flash flash-info" role="status">Der Zeitraum zum Zurücksetzen ist abgelaufen. Fordere auf der Anmeldeseite mit „Passwort vergessen?“ einen neuen Link an.</div>`
+          : '',
         html`<section class="card narrow">
           <h1>${setup ? 'Willkommen! Wie heißt du?' : 'Profil'}</h1>
           ${setup ? html`<p class="lead">Dein Name ist nur für Anbieter sichtbar, bei denen du buchst oder Mitglied bist – nie öffentlich.</p>` : ''}
@@ -248,7 +256,9 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
             ${setup && !user.password_hash
               ? html`<div class="field"><label for="new_password">Passwort festlegen (optional, mindestens ${MIN_PASSWORD_LENGTH} Zeichen)</label>
                   <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" maxlength="200">
-                  <span class="hint">Damit meldest du dich künftig direkt mit E-Mail und Passwort an.</span></div>`
+                  <span class="hint">Damit meldest du dich künftig direkt mit E-Mail und Passwort an.</span></div>
+                  <div class="field"><label for="new_password2">Passwort wiederholen</label>
+                  <input id="new_password2" name="new_password2" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" maxlength="200"></div>`
               : ''}
             <button class="btn" type="submit">Speichern</button>
           </form>
@@ -259,7 +269,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
               <h2>Passwort</h2>
               <p>${user.password_hash ? 'Du kannst dich mit E-Mail und Passwort anmelden.' : 'Noch kein Passwort festgelegt – du meldest dich per E-Mail-Link an.'}</p>
               <form method="post" action="/profile/password" class="stack">
-                ${user.password_hash
+                ${needCurrent
                   ? html`<div class="field"><label for="current_password">Aktuelles Passwort</label><input id="current_password" name="current_password" type="password" autocomplete="current-password" required maxlength="200"></div>`
                   : ''}
                 <div class="field"><label for="pw1">${user.password_hash ? 'Neues Passwort' : 'Passwort'} (mindestens ${MIN_PASSWORD_LENGTH} Zeichen)</label><input id="pw1" name="new_password" type="password" autocomplete="new-password" required minlength="${MIN_PASSWORD_LENGTH}" maxlength="200"></div>
@@ -293,7 +303,9 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     if (!name) return back(c, '/profile?setup=1');
     const newPw = typeof f.new_password === 'string' ? f.new_password : '';
     if (newPw && !user.password_hash) {
-      if (passwordProblem(newPw)) return back(c, '/profile?setup=1', 'password_weak');
+      const keep = (msg: string) => back(c, `/profile?setup=1${str(f, 'next') ? `&next=${encodeURIComponent(str(f, 'next'))}` : ''}`, msg);
+      if (passwordProblem(newPw)) return keep('password_weak');
+      if (typeof f.new_password2 === 'string' && f.new_password2 !== newPw) return keep('password_mismatch');
       await setPassword(c.get('deps').db, user.id, newPw, getCookie(c, SESSION_COOKIE));
     }
     await updateProfile(c.get('deps').db, user.id, {
@@ -312,7 +324,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     const pw = typeof f.new_password === 'string' ? f.new_password : '';
     if (pw !== (typeof f.new_password2 === 'string' ? f.new_password2 : '')) return back(c, '/profile#passwort', 'password_mismatch');
     if (passwordProblem(pw)) return back(c, '/profile#passwort', 'password_weak');
-    if (user.password_hash) {
+    if (user.password_hash && !user.recent_link_login) {
       const current = typeof f.current_password === 'string' ? f.current_password : '';
       if (!(await verifyPassword(current.slice(0, 200), user.password_hash))) return back(c, '/profile#passwort', 'password_wrong');
     }

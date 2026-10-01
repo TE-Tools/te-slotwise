@@ -36,7 +36,8 @@ function loginForm(next: string | null, email = '', error?: string) {
       <button class="btn" type="submit" name="mode" value="password">Anmelden</button>
       <div class="divider"><span>oder</span></div>
       <button class="btn btn-secondary" type="submit" name="mode" value="link">Anmeldelink per E-Mail senden</button>
-      <p class="hint">Der Anmeldelink funktioniert auch, wenn du dein Passwort vergessen hast.</p>
+      <button class="linklike" type="submit" name="mode" value="forgot">Passwort vergessen?</button>
+      <p class="hint">Bei „Passwort vergessen?“ bekommst du einen Anmeldelink. Danach kannst du direkt ein neues Passwort festlegen – das alte brauchst du nicht.</p>
     </form>
   </section>`;
 }
@@ -115,6 +116,8 @@ export function registerAuthRoutes(app: Hono<AppEnv>) {
     if (!email) return render(c, { title: 'Anmelden', body: loginForm(next, str(f, 'email', 300), 'Bitte eine gültige E-Mail-Adresse eingeben.') }, 400);
 
     const password = typeof f.password === 'string' ? f.password : '';
+    // Passwort vergessen: Anmeldelink, danach direkt zum Festlegen eines neuen Passworts.
+    if (str(f, 'mode') === 'forgot') return startLogin(c, email, '/profile?reset=1');
     // Ohne Passwort (oder ausdrücklich gewünscht): Anmeldelink per E-Mail.
     if (str(f, 'mode') === 'link' || !password) {
       if (str(f, 'mode') !== 'link' && !password) {

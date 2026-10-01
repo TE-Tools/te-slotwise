@@ -78,4 +78,23 @@
     sel.addEventListener('change', update);
     update();
   });
+  // „voll“: Preis eines Termins als bezahlten Betrag übernehmen.
+  document.querySelectorAll('[data-fill-from]').forEach(function (btn) {
+    var from = document.getElementById(btn.getAttribute('data-fill-from'));
+    var to = document.getElementById(btn.getAttribute('data-fill-to'));
+    if (!from || !to) return;
+    btn.hidden = false;
+    btn.addEventListener('click', function () {
+      to.value = from.value;
+      to.focus();
+    });
+  });
+
+  // Wochenkalender auf schmalen Bildschirmen zum heutigen Tag scrollen.
+  document.querySelectorAll('.week-scroll').forEach(function (box) {
+    var today = box.querySelector('.week-dayhead.is-today');
+    var axis = box.querySelector('.week-axis');
+    if (!today || box.scrollWidth <= box.clientWidth) return;
+    box.scrollLeft = Math.max(0, today.offsetLeft - (axis ? axis.offsetWidth : 0));
+  });
 })();

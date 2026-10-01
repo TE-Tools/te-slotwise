@@ -15,6 +15,7 @@ import {
   respondToProposal,
   type WsBookingRow,
 } from '../services/bookings.ts';
+import { ATTENDANCE_LABELS, uncheckedCount } from '../services/billing.ts';
 import { retryNotification, sendSecret } from '../services/notifications.ts';
 import { getAudience, getOffering, listOfferings, saveOffering, setArchived, type Audience, type Offering, type OfferingInput } from '../services/offerings.ts';
 import {
@@ -114,6 +115,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     const confirmed = upcoming.filter((b) => b.status === 'confirmed');
     const offerings = await listOfferings(db, ws.id);
     const failed = (await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM notifications WHERE workspace_id = ? AND status = 'failed'`, [ws.id]))!.n;
+    const toCheck = can(ws.role, 'billing.manage') ? await uncheckedCount(db, ws.id, now) : 0;
     return page(c, ws, 'overview', 'Übersicht', [
       flash(c.req.query('msg')),
       pageHeader(ws.name, undefined, html`<a class="btn" href="/w/${ws.id}/slots/new">Slots anlegen</a>`),
@@ -121,6 +123,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         <a class="stat ${needsMe.length ? 'stat-action' : ''}" href="/w/${ws.id}/bookings?status=awaiting_me"><span class="stat-num">${needsMe.length}</span><span>warten auf dich</span></a>
         <a class="stat" href="/w/${ws.id}/bookings?status=confirmed"><span class="stat-num">${confirmed.length}</span><span>feste kommende Termine</span></a>
         <a class="stat" href="/w/${ws.id}/offerings"><span class="stat-num">${offerings.length}</span><span>aktive Angebote</span></a>
+        ${toCheck ? html`<a class="stat stat-action" href="/w/${ws.id}/students/check"><span class="stat-num">${toCheck}</span><span>Termine abzuhaken</span></a>` : ''}
         ${failed ? html`<a class="stat stat-error" href="/w/${ws.id}/notifications"><span class="stat-num">${failed}</span><span>fehlgeschlagene E-Mails</span></a>` : ''}
       </div>`,
       !offerings.length
@@ -576,16 +579,22 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         background: sl.kind === 'window' || full || sl.confirmed + sl.requested > 0,
       });
     }
+    const billing = can(ws.role, 'billing.manage');
+    const now = Date.now();
     for (const b of bookings) {
       const day = localDate(Date.parse(b.starts_at), tz);
-      const href = `/w/${ws.id}/bookings?from=${day}&to=${day}#b-${b.id}`;
+      // Vergangene feste Termine führen zum Abhaken (Anwesenheit, Zahlung) auf der Schülerseite.
+      const done = b.status === 'confirmed' && Date.parse(b.ends_at) <= now;
+      const href = done && billing ? `/w/${ws.id}/students/${b.user_id}?month=${day.slice(0, 7)}#l-${b.id}` : `/w/${ws.id}/bookings?from=${day}&to=${day}#b-${b.id}`;
+      const check = !done ? '' : b.attendance === 'attended' ? '✓ war da · ' : b.attendance === 'absent_billed' ? 'gefehlt · ' : b.attendance === 'absent' ? 'ausgefallen · ' : '➜ abhaken · ';
       items.push({
         start: Date.parse(b.starts_at),
         end: Date.parse(b.ends_at),
         title: b.booker_name || 'Ohne Namen',
-        detail: `${b.offering_name}${b.status === 'requested' ? ' · angefragt' : ''}${b.proposed_by ? ' · Änderung offen' : ''}`,
+        detail: `${check}${b.offering_name}${b.status === 'requested' ? ' · angefragt' : ''}${b.proposed_by ? ' · Änderung offen' : ''}`,
         href,
         kind: b.status === 'confirmed' ? 'confirmed' : 'requested',
+        mark: done ? (b.attendance ? 'checked' : 'todo') : undefined,
       });
       if (b.proposed_starts_at && b.proposed_ends_at) {
         items.push({ start: Date.parse(b.proposed_starts_at), end: Date.parse(b.proposed_ends_at), title: `Vorschlag: ${b.booker_name}`, detail: b.proposed_by === 'provider' ? 'wartet auf Buchende' : 'wartet auf dich', href, kind: 'proposal' });
@@ -618,6 +627,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
           { kind: 'confirmed', label: 'Belegt (fest)' },
           { kind: 'requested', label: 'Angefragt' },
           { kind: 'proposal', label: 'Zeitvorschlag offen' },
+          ...(billing ? [{ kind: 'todo' as const, label: 'Vergangen, noch abzuhaken' }] : []),
           { kind: 'blocked', label: 'Gesperrt (kein Slot)' },
         ],
       }),
@@ -978,6 +988,10 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         <p>${when(b.starts_at, b.ends_at, b.timezone)} · ${b.offering_name}${b.slot_kind === 'window' ? html` <span class="badge badge-window">Wunschzeit</span>` : ''}</p>
         ${b.conflicts && active ? html`<p class="flash flash-warn">Überschneidet sich mit ${b.conflicts} anderen offenen oder festen Termin(en) in diesem Arbeitsbereich.</p>` : ''}
         ${b.note ? html`<p class="muted">Nachricht: ${b.note}</p>` : ''}
+        ${past && b.status === 'confirmed' && can(ws.role, 'billing.manage')
+          ? html`<p>${b.attendance ? html`<span class="badge badge-confirmed">${ATTENDANCE_LABELS[b.attendance]}</span>` : html`<span class="badge badge-requested">noch nicht abgehakt</span>`}
+              <a href="/w/${ws.id}/students/${b.user_id}?month=${localDate(Date.parse(b.starts_at), ws.timezone).slice(0, 7)}#l-${b.id}">${b.attendance ? 'Abrechnung ansehen' : 'Jetzt abhaken'}</a></p>`
+          : ''}
         ${b.cancel_requested_at && b.status === 'confirmed' ? html`<p class="flash flash-action">Die buchende Person bittet um Absage.</p>` : ''}
         ${active ? proposalNote(b, 'provider') : ''}
         ${active

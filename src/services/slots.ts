@@ -98,7 +98,7 @@ async function overlaps(db: Db, wsId: string, offeringId: string, startMs: numbe
   return !!row;
 }
 
-async function insertSlot(db: Db, wsId: string, offering: Offering, seriesId: string | null, startMs: number, tz: string, p: SlotInput) {
+export async function insertSlot(db: Db, wsId: string, offering: Offering, seriesId: string | null, startMs: number, tz: string, p: SlotInput) {
   const id = newId();
   const now = nowIso();
   await db.run(

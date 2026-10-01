@@ -2,7 +2,7 @@ import { html, raw } from 'hono/html';
 import { addDays, isoWeekday } from '../time.ts';
 import type { H } from './ui.ts';
 
-const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+export const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
 export function parseMonth(raw: string | undefined, fallbackDate: string): string {

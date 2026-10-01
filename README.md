@@ -7,6 +7,8 @@ oder freie Zeitfenster an, geben sie gezielt frei (öffentlich, für Gruppen, f�
 intern) und verwalten Buchungen. Erster Anwendungsfall ist Musikunterricht – Produkt, Datenmodell
 und Oberfläche sind aber allgemein gehalten (Unterricht, Beratung, Kurse, Räume, Veranstaltungen).
 
+Für Lehrkräfte gibt es unter **Schüler** eine Abrechnungsübersicht: Standard- und Einzelpreise, Termine nach der Stunde abhaken, bezahlte Beträge, Monats- und Jahresübersicht und CSV-Export.
+
 Weitere Dokumente:
 
 - [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md) – Produktgrenzen, Rollen, Architektur, Datenmodell, Buchungsablauf

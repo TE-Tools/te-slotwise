@@ -4,7 +4,8 @@ import { newId, nowIso } from '../ids.ts';
 import type { Payload, Template } from '../mail/templates.ts';
 import { formatRange, localDate, LocalTimeError, localToUtc } from '../time.ts';
 import { enqueue } from './notifications.ts';
-import { TAKEN_SQL } from './slots.ts';
+import type { Offering } from './offerings.ts';
+import { insertSlot, TAKEN_SQL } from './slots.ts';
 import { providerRecipients } from './workspaces.ts';
 
 // Buchungsablauf in Kürze:
@@ -474,6 +475,7 @@ export interface WsBookingRow extends BookingTimes {
   user_id: string;
   is_member: number;
   conflicts: number;
+  attendance: 'attended' | 'absent_billed' | 'absent' | null;
 }
 
 export interface BookingFilter {
@@ -527,7 +529,7 @@ export async function listWorkspaceBookings(db: Db, wsId: string, f: BookingFilt
     params.grp = f.groupId;
   }
   return await db.all<WsBookingRow>(
-    `SELECT b.id, b.status, b.note, b.cancel_requested_at, b.created_at, b.starts_at, b.ends_at, s.timezone,
+    `SELECT b.id, b.status, b.note, b.cancel_requested_at, b.created_at, b.starts_at, b.ends_at, s.timezone, b.attendance,
        b.proposed_starts_at, b.proposed_ends_at, b.proposed_by, b.proposal_note, b.slot_id, b.offering_id,
        o.name AS offering_name, s.id AS slot_id, s.kind AS slot_kind,
        u.display_name AS booker_name, u.email AS booker_email, u.id AS user_id,
@@ -561,4 +563,59 @@ export async function bookingHistory(db: Db, wsId: string, bookingId: string) {
 
 export async function getWorkspaceBooking(db: Db, wsId: string, bookingId: string) {
   return (await listWorkspaceBookings(db, wsId, { id: bookingId }))[0];
+}
+
+export type AddLessonResult = { ok: true; bookingId: string } | { ok: false; code: 'full' | 'already_booked' };
+
+/**
+ * Die Anbieterseite trägt einen festen Termin für eine Person ein – z. B. eine Stunde nachtragen,
+ * die außerhalb der App vereinbart wurde, oder Schüler:innen direkt einplanen.
+ * Gibt es zu dieser Zeit schon einen festen Slot des Angebots, wird er verwendet, sonst entsteht ein
+ * geschlossener, interner Slot nur für diesen Termin. Überschneidungen verhindert der Datenbank-Trigger.
+ */
+export async function providerAddBooking(
+  db: Db,
+  appUrl: string,
+  p: { workspaceId: string; offering: Offering; userId: string; actorId: string; tz: string; startMs: number; durationMin: number; note: string },
+  now = Date.now(),
+): Promise<AddLessonResult> {
+  const endMs = p.startMs + p.durationMin * 60_000;
+  try {
+    return await db.tx(async (): Promise<AddLessonResult> => {
+      const existing = await db.get<{ id: string }>(
+        `SELECT id FROM slots WHERE workspace_id = ? AND offering_id = ? AND kind = 'fixed' AND starts_at = ? AND ends_at = ? AND status <> 'draft'`,
+        [p.workspaceId, p.offering.id, nowIso(p.startMs), nowIso(endMs)],
+      );
+      const slotId =
+        existing?.id ??
+        (await insertSlot(db, p.workspaceId, p.offering, null, p.startMs, p.tz, {
+          kind: 'fixed',
+          durationMin: p.durationMin,
+          bufferMin: 0,
+          capacity: 1,
+          location: null,
+          onlineInfo: null,
+          confirmationMode: null,
+          status: 'closed',
+          preference: 'normal',
+          visibility: 'internal',
+          audience: { groupIds: [], membershipIds: [] },
+        }));
+      const id = newId();
+      const ts = nowIso(now);
+      await db.run(
+        `INSERT INTO bookings (id, workspace_id, slot_id, offering_id, user_id, status, starts_at, ends_at, holds_seat, note, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, 1, ?, ?, ?)`,
+        [id, p.workspaceId, slotId, p.offering.id, p.userId, nowIso(p.startMs), nowIso(endMs), p.note.slice(0, 1000), ts, ts],
+      );
+      await logEvent(db, { id, workspace_id: p.workspaceId }, null, 'confirmed', p.actorId, 'Von der Anbieterseite eingetragen');
+      // Nur künftige Termine ankündigen; nachgetragene Stunden brauchen keine E-Mail.
+      if (p.startMs > now) await notifyBooker(db, appUrl, (await loadCtx(db, id))!, 'booking_confirmed');
+      return { ok: true, bookingId: id };
+    });
+  } catch (e) {
+    if (isUniqueViolation(e)) return { ok: false, code: 'already_booked' };
+    if (isFull(e)) return { ok: false, code: 'full' };
+    throw e;
+  }
 }

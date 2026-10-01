@@ -5,7 +5,7 @@ import type { H } from './ui.ts';
 // Großer Wochenkalender mit Zeitachse. Reines HTML/CSS: Termine werden absolut in ihrer
 // Tagesspalte positioniert, überlappende Einträge teilen sich die Breite.
 
-export type WeekItemKind = 'free' | 'reluctant' | 'confirmed' | 'requested' | 'proposal' | 'mine' | 'draft' | 'closed' | 'blocked';
+export type WeekItemKind = 'free' | 'reluctant' | 'confirmed' | 'requested' | 'proposal' | 'mine' | 'draft' | 'closed' | 'blocked' | 'todo';
 
 export interface WeekItem {
   start: number; // UTC-Millisekunden
@@ -16,6 +16,8 @@ export interface WeekItem {
   kind: WeekItemKind;
   /** Hintergrund-Einträge (Zeitfenster) liegen unter den anderen und belegen keine eigene Spalte. */
   background?: boolean;
+  /** Vergangener Termin: abgehakt oder noch abzuhaken (Markierung am Rand). */
+  mark?: 'checked' | 'todo';
 }
 
 const DAY_NAMES = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -172,7 +174,7 @@ function event(item: WeekItem, top: number, h: number, lane: number, lanes: numb
   const style = `top:${top}px;height:${Math.max(h, 18)}px;left:calc(${(lane / lanes) * 100}% + 2px);width:calc(${100 / lanes}% - 4px)`;
   const label = `${t} ${item.title}${item.detail ? `, ${item.detail}` : ''}`;
   const inner = html`<span class="ev-time">${t}</span><span class="ev-title">${item.title}</span>${item.detail && h > 40 ? html`<span class="ev-detail">${item.detail}</span>` : ''}`;
-  const cls = `ev ev-${item.kind} ${background ? 'ev-bg' : ''} ${h < 34 ? 'ev-compact' : ''}`;
+  const cls = `ev ev-${item.kind} ${background ? 'ev-bg' : ''} ${h < 34 ? 'ev-compact' : ''} ${item.mark ? `ev-${item.mark}` : ''}`;
   return item.href
     ? html`<a class="${cls}" style="${raw(style)}" href="${item.href}" title="${label}" aria-label="${label}">${inner}</a>`
     : html`<div class="${cls}" style="${raw(style)}" title="${label}">${inner}</div>`;
