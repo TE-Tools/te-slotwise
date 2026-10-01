@@ -3,6 +3,9 @@
 
 export type Template =
   | 'login_link'
+  | 'register_confirm'
+  | 'password_reset'
+  | 'account_exists'
   | 'invitation'
   | 'booking_requested_booker'
   | 'booking_confirmed'
@@ -30,6 +33,9 @@ export interface Payload {
 
 export const TEMPLATE_LABELS: Record<Template, string> = {
   login_link: 'Anmeldelink',
+  register_confirm: 'Registrierung bestätigen',
+  password_reset: 'Passwort zurücksetzen',
+  account_exists: 'Registrierung: Konto vorhanden',
   invitation: 'Einladung',
   booking_requested_booker: 'Anfrage eingegangen (Buchende)',
   booking_confirmed: 'Buchung bestätigt',
@@ -57,6 +63,21 @@ export function render(template: Template, p: Payload, secretLink?: string): { s
       return {
         subject: 'Dein Anmeldelink für TE-Slotwise',
         text: `Hallo,\n\nmit diesem Link meldest du dich bei TE-Slotwise an. Er ist 15 Minuten gültig und nur einmal verwendbar:\n\n${secretLink}\n\nFalls du keine Anmeldung angefordert hast, kannst du diese Nachricht ignorieren.${footer}`,
+      };
+    case 'register_confirm':
+      return {
+        subject: 'Bitte bestätige deine E-Mail-Adresse – TE-Slotwise',
+        text: `Hallo${p.bookerName ? ` ${p.bookerName}` : ''},\n\nschön, dass du dich bei TE-Slotwise registriert hast. Bitte bestätige deine E-Mail-Adresse mit diesem Link (24 Stunden gültig):\n\n${secretLink}\n\nDanach meldest du dich mit E-Mail und Passwort an.\n\nFalls du dich nicht registriert hast, ignoriere diese Nachricht einfach – ohne Bestätigung wird das Konto nicht aktiv.${footer}`,
+      };
+    case 'password_reset':
+      return {
+        subject: 'Neues Passwort festlegen – TE-Slotwise',
+        text: `Hallo,\n\nmit diesem Link legst du ein neues Passwort für TE-Slotwise fest. Er ist 15 Minuten gültig und nur einmal verwendbar:\n\n${secretLink}\n\nFalls du das nicht angefordert hast, ignoriere diese Nachricht – dein bisheriges Passwort bleibt gültig.${footer}`,
+      };
+    case 'account_exists':
+      return {
+        subject: 'Du hast schon ein Konto – TE-Slotwise',
+        text: `Hallo,\n\njemand (vermutlich du) wollte sich mit dieser E-Mail-Adresse bei TE-Slotwise registrieren. Du hast aber schon ein Konto.\n\nPasswort vergessen? Mit diesem Link legst du ein neues fest (15 Minuten gültig):\n\n${secretLink}\n\nFalls du das nicht warst, ignoriere diese Nachricht einfach.${footer}`,
       };
     case 'invitation':
       return {

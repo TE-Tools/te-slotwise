@@ -45,9 +45,11 @@ function client(app: ReturnType<typeof createApp>) {
   return { req };
 }
 
-async function login(app: ReturnType<typeof createApp>, mailer: MemoryMailer, email: string, name = 'Testperson') {
+/** Registriert ein Konto (Vorname, Nachname, E-Mail, Passwort) und bestätigt es über den Link aus der E-Mail. */
+async function login(app: ReturnType<typeof createApp>, mailer: MemoryMailer, email: string, name = 'Test Person', password = 'test-passwort-1') {
   const c = client(app);
-  const r1 = await c.req('/login', { method: 'POST', form: { email, mode: 'link' } });
+  const [first, ...rest] = name.split(' ');
+  const r1 = await c.req('/register', { method: 'POST', form: { first_name: first, last_name: rest.join(' ') || 'Person', email, password, password2: password } });
   assert.equal(r1.status, 200);
   const mail = mailer.sent.at(-1)!;
   assert.equal(mail.to, email);
@@ -58,7 +60,6 @@ async function login(app: ReturnType<typeof createApp>, mailer: MemoryMailer, em
   assert.equal(r2.status, 303);
   // Token ist nur einmal gültig.
   assert.equal((await c.req(`/auth/verify?token=${token}`)).status, 400);
-  await c.req('/profile', { method: 'POST', form: { display_name: name } });
   return c;
 }
 
@@ -152,7 +153,7 @@ test('Ohne E-Mail-Versand wird kein Versand behauptet', async () => {
   const { createMailer } = await import('../src/mail/mailer.ts');
   const app = createApp(() => ({ db, config, mailer: createMailer(config), push: new MemoryPushSender(), limiter: new RateLimiter(), kick: () => {} }));
   const c = client(app);
-  const r = await c.req('/login', { method: 'POST', form: { email: 'a@example.com', mode: 'link' } });
+  const r = await c.req('/password/forgot', { method: 'POST', form: { email: 'a@example.com' } });
   const text = await r.text();
   assert.match(text, /nicht eingerichtet/);
   assert.doesNotMatch(text, /Prüfe dein Postfach/);
@@ -281,14 +282,13 @@ test('Passwort: Sperre nach zu vielen Fehlversuchen', async () => {
   assert.match(await locked.text(), /gesperrt/);
 });
 
-test('Passwort vergessen: nach Anmeldelink neues Passwort ohne das alte setzen', async () => {
+test('Passwort vergessen: Link per E-Mail, neues Passwort ohne das alte', async () => {
   const { app, mailer } = await setup();
-  const c = await login(app, mailer, 'vergessen@example.com', 'Vergesslich');
-  await c.req('/profile/password', { method: 'POST', form: { new_password: 'altes-passwort-1', new_password2: 'altes-passwort-1' } });
-  // Neues Gerät: „Passwort vergessen?“ schickt einen Link, der zum Profil führt.
+  await login(app, mailer, 'vergessen@example.com', 'Vera Gesslich', 'altes-passwort-1');
   const x = client(app);
-  const r = await x.req('/login', { method: 'POST', form: { email: 'vergessen@example.com', mode: 'forgot' } });
+  const r = await x.req('/password/forgot', { method: 'POST', form: { email: 'vergessen@example.com' } });
   assert.equal(r.status, 200);
+  assert.match(mailer.sent.at(-1)!.subject, /Neues Passwort/);
   const token = /token=([A-Za-z0-9_-]+)/.exec(mailer.sent.at(-1)!.text)![1];
   const v = await x.req('/auth/verify', { method: 'POST', form: { token } });
   assert.equal(v.headers.get('location'), '/profile?reset=1');
@@ -297,11 +297,42 @@ test('Passwort vergessen: nach Anmeldelink neues Passwort ohne das alte setzen',
   const ok = await x.req('/profile/password', { method: 'POST', form: { new_password: 'neues-passwort-2', new_password2: 'neues-passwort-2' } });
   assert.match(ok.headers.get('location')!, /password_saved/);
   const y = client(app);
-  const good = await y.req('/login', { method: 'POST', form: { email: 'vergessen@example.com', password: 'neues-passwort-2', mode: 'password' } });
+  assert.equal((await y.req('/login', { method: 'POST', form: { email: 'vergessen@example.com', password: 'altes-passwort-1' } })).status, 400);
+  const good = await y.req('/login', { method: 'POST', form: { email: 'vergessen@example.com', password: 'neues-passwort-2' } });
   assert.equal(good.status, 303);
   // Mit Passwort angemeldet: Ändern braucht weiterhin das aktuelle Passwort.
   const no = await y.req('/profile/password', { method: 'POST', form: { new_password: 'drittes-passwort', new_password2: 'drittes-passwort' } });
   assert.match(no.headers.get('location')!, /password_wrong/);
+  // Unbekannte Adresse: gleiche Antwort, aber keine E-Mail.
+  const before = mailer.sent.length;
+  const unknown = await client(app).req('/password/forgot', { method: 'POST', form: { email: 'niemand@example.com' } });
+  assert.match(await unknown.text(), /Prüfe dein Postfach/);
+  assert.equal(mailer.sent.length, before);
+});
+
+test('Registrierung: Bestätigung nötig, Name Pflicht, bestehendes Konto wird nicht überschrieben', async () => {
+  const { app, mailer, db } = await setup();
+  const c = client(app);
+  const bad = await c.req('/register', { method: 'POST', form: { first_name: 'Nur', last_name: '', email: 'neu@example.com', password: 'langes-passwort', password2: 'langes-passwort' } });
+  assert.equal(bad.status, 400);
+  const r = await c.req('/register', { method: 'POST', form: { first_name: 'Nina', last_name: 'Neu', email: 'Neu@Example.com', password: 'langes-passwort', password2: 'langes-passwort' } });
+  assert.match(await r.text(), /Prüfe dein Postfach/);
+  assert.match(mailer.sent.at(-1)!.subject, /bestätige/);
+  // Vor der Bestätigung keine Anmeldung.
+  const early = await client(app).req('/login', { method: 'POST', form: { email: 'neu@example.com', password: 'langes-passwort' } });
+  assert.match(await early.text(), /noch nicht bestätigt/);
+  const token = /token=([A-Za-z0-9_-]+)/.exec(mailer.sent.at(-1)!.text)![1];
+  await c.req('/auth/verify', { method: 'POST', form: { token } });
+  const u = (await db.get<{ first_name: string; last_name: string; display_name: string }>(`SELECT first_name, last_name, display_name FROM users WHERE email = 'neu@example.com'`))!;
+  assert.deepEqual({ ...u }, { first_name: 'Nina', last_name: 'Neu', display_name: 'Nina Neu' });
+  assert.match(await (await c.req('/dashboard')).text(), /Hallo Nina Neu/);
+  // Erneute Registrierung mit derselben Adresse ändert nichts, schickt nur einen Hinweis.
+  await client(app).req('/register', { method: 'POST', form: { first_name: 'Fremd', last_name: 'Person', email: 'neu@example.com', password: 'anderes-passwort', password2: 'anderes-passwort' } });
+  assert.match(mailer.sent.at(-1)!.subject, /schon ein Konto/);
+  assert.equal((await client(app).req('/login', { method: 'POST', form: { email: 'neu@example.com', password: 'langes-passwort' } })).status, 303);
+  // Die alte Anmeldung per Link gibt es nicht mehr.
+  const link = await client(app).req('/login', { method: 'POST', form: { email: 'neu@example.com', mode: 'link' } });
+  assert.equal(link.status, 400);
 });
 
 test('Schülerübersicht: nur für Verwaltende, Abhaken, Preise, Zahlungen und CSV', async () => {
@@ -310,7 +341,7 @@ test('Schülerübersicht: nur für Verwaltende, Abhaken, Preise, Zahlungen und C
   const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Musik', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
   const off = await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Stunde', duration_min: '45', confirmation_mode: 'manual', visibility: 'internal' } });
   const offId = /offerings\/([^?]+)/.exec(off.headers.get('location')!)![1];
-  const student = await login(app, mailer, 'kind@example.com', 'Kind');
+  const student = await login(app, mailer, 'kind@example.com', 'Kind Muster');
   const studentId = (await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'kind@example.com'`))!.id;
   await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES ('m-kind', ?, ?, 'member', ?)`, [wsId, studentId, new Date().toISOString()]);
   // Mitglieder sehen die Abrechnung nicht.
@@ -349,7 +380,7 @@ test('Schülerübersicht: nur für Verwaltende, Abhaken, Preise, Zahlungen und C
   assert.match(overview, /60,00\s*€/); // berechnet
   assert.match(overview, /individuell/);
   const csv = await (await owner.req(`/w/${wsId}/students/export.csv?month=2026-01`)).text();
-  assert.match(csv, /2026-01-05;15:00;15:45;45;Kind;kind@example.com;Stunde;fest;Stattgefunden;30,00;30,00;30,00/);
+  assert.match(csv, /2026-01-05;15:00;15:45;45;Kind Muster;kind@example.com;Stunde;fest;Stattgefunden;30,00;30,00;30,00/);
   // Fremde Rücksprungziele werden ignoriert.
   const evil = await owner.req(`/w/${wsId}/lessons`, { method: 'POST', form: { back: 'https://evil.example/', ids: ids[1], [`att_${ids[1]}`]: 'attended', [`price_${ids[1]}`]: '30', [`paid_${ids[1]}`]: '' } });
   assert.match(evil.headers.get('location')!, new RegExp(`^/w/${wsId}/students\\?msg=`));
@@ -362,11 +393,14 @@ test('Push-Abo: nur angemeldet, gleiche Herkunft und bekannte Push-Dienste', asy
     app.request(`${ORIGIN}/push/subscribe`, { method: 'POST', headers: { 'content-type': 'application/json', origin, cookie }, body: JSON.stringify(body) });
   assert.equal((await post(sub)).status, 401);
   // Anmelden und das Sitzungscookie übernehmen.
-  await app.request(`${ORIGIN}/login`, { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' }, body: 'email=push%40example.com&mode=link' });
+  await app.request(`${ORIGIN}/register`, {
+    method: 'POST',
+    headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'first_name=Push&last_name=Test&email=push%40example.com&password=push-passwort-1&password2=push-passwort-1',
+  });
   const token = /token=([A-Za-z0-9_-]+)/.exec(mailer.sent.at(-1)!.text)![1];
   const v = await app.request(`${ORIGIN}/auth/verify`, { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' }, body: `token=${token}` });
   const cookie = /sw_session=[^;]+/.exec(v.headers.get('set-cookie') ?? '')![0];
-  await app.request(`${ORIGIN}/profile`, { method: 'POST', headers: { origin: ORIGIN, cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: 'display_name=Push&notify_email=1' });
   const page = await (await app.request(`${ORIGIN}/profile`, { headers: { cookie } })).text();
   assert.match(page, /data-push-key="BMemoryTestKey"/);
   assert.match(page, /rel="manifest"/);
@@ -376,4 +410,65 @@ test('Push-Abo: nur angemeldet, gleiche Herkunft und bekannte Push-Dienste', asy
   assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM push_subscriptions`))!.n, 1);
   const profile = await (await app.request(`${ORIGIN}/profile`, { headers: { cookie } })).text();
   assert.match(profile, /Geräte mit Push/);
+});
+
+test('Kalender-Abo (iCalendar) und Schnittstelle für den Familienplaner', async () => {
+  const { app, mailer, db } = await setup();
+  const owner = await login(app, mailer, 'lehrerin@example.com', 'Lea Lehrer');
+  const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Klavier, Neuss', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
+  const offId = /offerings\/([^?]+)/.exec((await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Klavierstunde', duration_min: '45', confirmation_mode: 'manual', visibility: 'internal', location: 'Raum 1' } })).headers.get('location')!)![1];
+  const kid = await login(app, mailer, 'kind2@example.com', 'Karl Klein', 'karls-passwort');
+  const kidId = (await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'kind2@example.com'`))!.id;
+  await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES ('m-karl', ?, ?, 'member', ?)`, [wsId, kidId, new Date().toISOString()]);
+  const date = futureDate(5);
+  await owner.req(`/w/${wsId}/students/${kidId}/lessons`, { method: 'POST', form: { offering_id: offId, date, time: '16:30', duration: '' } });
+
+  // Abo-Link des Kindes aus dem Profil.
+  const profile = await (await kid.req('/profile')).text();
+  const feedUrl = /value="(http:\/\/localhost:3000\/cal\/[A-Za-z0-9_-]+\.ics)"/.exec(profile)![1];
+  assert.match(profile, /webcal:\/\/localhost:3000\/cal\//);
+  const feedPath = feedUrl.replace(ORIGIN, '');
+  const ics = await (await app.request(`${ORIGIN}${feedPath}`)).text();
+  assert.match(ics, /^BEGIN:VCALENDAR\r\n/);
+  assert.match(ics, /SUMMARY:Klavierstunde \(Klavier\\, Neuss\)/);
+  assert.match(ics, /LOCATION:Raum 1/);
+  assert.match(ics, /STATUS:CONFIRMED/);
+  assert.ok(ics.split('\r\n').every((l) => new TextEncoder().encode(l).length <= 75), 'Zeilen höchstens 75 Byte');
+  // Lehrerin sieht die Buchung mit Namen; nur-Arbeitsbereich-Abo funktioniert nur für Verwaltende.
+  const ownerFeed = /value="(http:\/\/localhost:3000\/cal\/[A-Za-z0-9_-]+\.ics)"/.exec(await (await owner.req('/profile')).text())![1].replace(ORIGIN, '');
+  assert.match(await (await app.request(`${ORIGIN}${ownerFeed}?ws=${wsId}`)).text(), /SUMMARY:Karl Klein · Klavierstunde/);
+  assert.equal((await app.request(`${ORIGIN}${feedPath}?ws=${wsId}`)).status, 404);
+  assert.equal((await app.request(`${ORIGIN}/cal/falsch.ics`)).status, 404);
+  // Download und einzelner Termin.
+  const dl = await kid.req('/calendar.ics');
+  assert.match(dl.headers.get('content-disposition')!, /attachment/);
+  const bookingId = (await db.get<{ id: string }>(`SELECT id FROM bookings WHERE user_id = ?`, [kidId]))!.id;
+  assert.match(await (await kid.req(`/bookings/${bookingId}/ics`)).text(), /BEGIN:VEVENT/);
+  // Neuer Link macht den alten ungültig.
+  await kid.req('/profile/calendar/rotate', { method: 'POST', form: {} });
+  assert.equal((await app.request(`${ORIGIN}${feedPath}`)).status, 404);
+
+  // Familienplaner: Anmeldung per API, Termine im Format von Orchester-Orga.
+  const api = (path: string, init: { method?: string; body?: unknown; token?: string } = {}) =>
+    app.request(`${ORIGIN}${path}`, {
+      method: init.method ?? 'GET',
+      headers: { 'content-type': 'application/json', ...(init.token ? { authorization: `Bearer ${init.token}` } : {}) },
+      body: init.body ? JSON.stringify(init.body) : undefined,
+    });
+  assert.equal((await api('/api/login', { method: 'POST', body: { email: 'kind2@example.com', password: 'falsch-falsch' } })).status, 401);
+  const loginRes = await api('/api/login', { method: 'POST', body: { email: 'kind2@example.com', password: 'karls-passwort', app: 'Familienplaner' } });
+  assert.equal(loginRes.status, 200);
+  const { token, name } = (await loginRes.json()) as { token: string; name: string };
+  assert.equal(name, 'Karl Klein');
+  const termine = ((await (await api('/api/me/termine?tage_zurueck=0', { token })).json()) as { termine: Record<string, string>[] }).termine;
+  assert.equal(termine.length, 1);
+  assert.equal(termine[0].titel, 'Klavierstunde');
+  assert.equal(termine[0].verein_name, 'Klavier, Neuss');
+  assert.equal(termine[0].beginn, `${date}T16:30`);
+  assert.equal(termine[0].ende, `${date}T17:15`);
+  assert.equal(termine[0].meine_rueckmeldung, 'zusage');
+  assert.match(await (await kid.req('/profile')).text(), /Verbundene Apps[\s\S]*Familienplaner/);
+  await api('/api/logout', { method: 'POST', token });
+  assert.equal((await api('/api/me/termine', { token })).status, 401);
+  assert.equal((await api('/api/me/termine')).status, 401);
 });

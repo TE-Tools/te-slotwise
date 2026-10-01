@@ -608,7 +608,11 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     };
     return page(c, ws, 'calendar', 'Kalender', [
       flash(c.req.query('msg'), c.req.query('n') ? `(${Number(c.req.query('n'))} angelegt${Number(c.req.query('k')) ? `, ${Number(c.req.query('k'))} übersprungen` : ''})` : undefined),
-      pageHeader('Wochenkalender', 'Auf eine freie (graue) Uhrzeit klicken, um dort Slots anzulegen. Klick auf einen Eintrag öffnet Slot oder Buchung.', html`<a class="btn" href="/w/${ws.id}/slots/new">Slots anlegen</a>`),
+      pageHeader(
+        'Wochenkalender',
+        'Auf eine freie (graue) Uhrzeit klicken, um dort Slots anzulegen. Klick auf einen Eintrag öffnet Slot oder Buchung.',
+        html`<a class="btn btn-secondary" href="/profile#kalender">Kalender abonnieren</a> <a class="btn" href="/w/${ws.id}/slots/new">Slots anlegen</a>`,
+      ),
       html`<form method="get" action="/w/${ws.id}/calendar" class="filters">
         <input type="hidden" name="week" value="${weekStart}">
         <label>Angebot <select name="offering"><option value="">alle</option>${options(offerings.map((o) => ({ value: o.id, label: o.name })), offeringId)}</select></label>

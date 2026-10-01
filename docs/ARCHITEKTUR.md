@@ -4,7 +4,7 @@
 
 Enthalten:
 
-- Anmeldung/Registrierung per E-Mail-Link; danach optional **Passwort** (PBKDF2-SHA-256, Sperre nach 8 Fehlversuchen für 15 Min.). „Passwort vergessen?“ schickt einen Anmeldelink; innerhalb von 30 Minuten danach lässt sich ein neues Passwort ohne das alte setzen. Profil, Benachrichtigungseinstellungen, Datenexport, Kontolöschung
+- **Registrierung** mit Vorname, Nachname, E-Mail und Passwort (PBKDF2-SHA-256); die E-Mail-Adresse wird per Link bestätigt (24 Std. gültig). **Anmeldung** nur mit E-Mail und Passwort (Sperre nach 8 Fehlversuchen für 15 Min.). „Passwort vergessen?“ schickt einen Link (15 Min.), danach neues Passwort ohne das alte. Profil, Benachrichtigungseinstellungen, Datenexport, Kontolöschung
 - Arbeitsbereiche (persönlich oder Organisation), Mitglieder mit Rollen, Wechsel zwischen Bereichen
 - Einladungen per E-Mail (Bereich, Gruppe oder Angebot), erneut senden, widerrufen, 7 Tage gültig
 - Gruppen mit frei wählbaren Namen
@@ -21,6 +21,8 @@ Enthalten:
 - Teilen per Web Share API und „Link kopieren“
 - **Installierbare App (PWA)**: Manifest, Service Worker (`public/sw.js`, nur Gestaltung und Offline-Seite werden zwischengespeichert – keine persönlichen Seiten), App-Symbole; „App installieren“ in Chrome/Edge/Android, auf dem iPhone über „Zum Home-Bildschirm“
 - **Push-Benachrichtigungen** (Web-Push, VAPID, RFC 8291 – nur Web-Crypto, `src/services/push.ts`): dieselben Anlässe wie die E-Mails (Bestätigung, Absage, Zeitvorschlag an Buchende; neue Anfrage/Buchung, Absage, Änderungswunsch an Anbieter). Pro Gerät einschaltbar im Profil, E-Mail optional abbestellbar. VAPID-Schlüssel werden automatisch erzeugt und in `app_settings` gespeichert
+- **Kalender-Export (iCalendar, RFC 5545)**: geheimer Abo-Link pro Person (`/cal/<token>.ics`, optional `?ws=` für einen verwalteten Bereich), Download, einzelner Termin; enthält eigene Buchungen und – für Verwaltende – die Buchungen ihrer Bereiche. Link neu erzeugbar
+- **Schnittstelle für andere TE-Apps** (`src/routes/api.ts`): `POST /api/login` → Token, `GET /api/me/termine` (Bearer) im selben Format wie Orchester-Orga/Vereinsleben – der Familienplaner bindet TE-Slotwise mit demselben Adapter an. Verbundene Apps sind im Profil sichtbar und trennbar
 - **Schüler & Abrechnung** (`/w/:id/students`, nur Eigentümer:in/Admin): Standardpreis (pro Termin oder pro 60 Minuten) und individuelle Preise pro Person; nach dem Termin abhaken (stattgefunden / gefehlt, wird berechnet / ausgefallen) – auch direkt aus dem Kalender; bezahlter Betrag pro Termin; Monats- und Jahresübersicht pro Person und gesamt; CSV-Export; Termine für eine Person nachtragen oder einplanen
 
 Nicht enthalten (architektonisch vorbereitet, siehe unten): Online-Zahlung, Rechnungen/Quittungen als PDF, Kalender-Synchronisierung,
@@ -65,7 +67,7 @@ Module:
 
 ## Sicherheit
 
-- Anmeldung: Einmal-Token (256 Bit, 15 Min. gültig), gespeichert nur als SHA-256-Hash. Der Link
+- Bestätigungs-/Passwort-Links: Einmal-Token (256 Bit, 24 Std. bzw. 15 Min. gültig), gespeichert nur als SHA-256-Hash. Der Link
   führt auf eine Bestätigungsseite; erst das Absenden verbraucht das Token (Link-Vorschauen in
   Mailprogrammen melden niemanden an). Die Anmeldung bestätigt die E-Mail-Adresse.
 - Sitzungen: zufälliges Token im `HttpOnly`-, `SameSite=Lax`-Cookie (`Secure` bei https), in der DB nur als Hash, 30 Tage gleitend.
@@ -75,7 +77,7 @@ Module:
   (`requireWs`) und prüft das Recht. Fremde oder unbekannte IDs liefern 404 – die Existenz wird nicht verraten.
 - Alle IDs sind zufällig (96 Bit), öffentliche Links 256 Bit; der öffentliche Link lässt sich neu erzeugen.
 - Einladungslinks gewähren allein keinen Zugriff: Annahme nur, wenn die angemeldete, bestätigte Adresse der eingeladenen entspricht.
-- Missbrauchsbremse: Anmeldelinks (pro IP und pro Adresse), Einladungen pro Bereich, Buchungen pro Person, neue Arbeitsbereiche pro Person.
+- Missbrauchsbremse: Bestätigungs-/Passwort-Links (pro IP und pro Adresse), Registrierungen und Passwort-Anmeldungen pro IP, Einladungen pro Bereich, Buchungen pro Person, neue Arbeitsbereiche pro Person.
 
 ## Mandantentrennung
 
@@ -89,8 +91,9 @@ Module:
 
 | Tabelle | Inhalt |
 |---|---|
-| `users` | Konto, E-Mail (bestätigt), Anzeigename, Benachrichtigungswünsche |
-| `sessions`, `login_tokens` | Sitzungen und Anmeldelinks (nur Hashes) |
+| `users` | Konto, E-Mail (bestätigt), Vor- und Nachname (`display_name` = beides), Passwort-Hash, Benachrichtigungswünsche, Kalender-Token |
+| `api_tokens` | Zugänge anderer Apps (nur Hash), 180 Tage, verlängern sich bei Nutzung |
+| `sessions`, `login_tokens` | Sitzungen, Bestätigungs- und Passwort-Links (nur Hashes) |
 | `workspaces` | Arbeitsbereich, Art, Zeitzone, öffentlicher Link |
 | `memberships` | Person ↔ Bereich mit Rolle |
 | `invitations` | Einladung mit Rolle, optional Gruppe/Angebot, Frist, Status, Versandzähler |

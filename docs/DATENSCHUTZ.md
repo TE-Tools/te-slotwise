@@ -9,14 +9,15 @@
 | Daten | Zweck | Wer sieht sie |
 |---|---|---|
 | E-Mail-Adresse | Anmeldung, Benachrichtigungen | die Person selbst; Verwaltende von Bereichen, in denen sie Mitglied ist oder gebucht hat |
-| Anzeigename | Zuordnung von Buchungen | wie oben |
+| Vor- und Nachname | Zuordnung von Buchungen | wie oben |
 | Mitgliedschaften, Rollen, Gruppen | Berechtigungen | die Person sieht nur eigene Gruppen; Verwaltende sehen alle im eigenen Bereich |
 | Buchungen, Nachrichten, Verlauf | Terminverwaltung | die Person selbst und Verwaltende des Bereichs |
 | Anwesenheit, Preis und bezahlter Betrag pro Termin, individueller Preis | Abrechnung des Unterrichts (Schülerübersicht) | Eigentümer:innen und Administrator:innen des Bereichs; die Person selbst über den Datenexport |
 | Push-Abo pro Gerät (Adresse beim Push-Dienst, Schlüssel, grobe Gerätebezeichnung wie „Android · Chrome“) | Push-Benachrichtigungen, nur nach ausdrücklichem Einschalten | die Person selbst (Profil → Geräte); löschbar dort oder durch Ausschalten |
 | Passwort (nur falls festgelegt) | Anmeldung | niemand – gespeichert nur als gesalzener PBKDF2-Hash |
 | Benachrichtigungsprotokoll (Empfänger, Art, Status, Fehler) | Nachvollziehbarkeit des Versands | Verwaltende des Bereichs |
-| Sitzungen, Anmeldelinks | Anmeldung | niemand (nur Hashes) |
+| Sitzungen, Bestätigungs-/Passwort-Links, App-Zugänge | Anmeldung, verbundene Apps (z. B. Familienplaner) | niemand (nur Hashes); verbundene Apps sieht die Person im Profil |
+| Kalender-Link (geheimer Token) | Kalender-Abo | die Person selbst; wer den Link kennt, sieht die Termine – im Profil neu erzeugbar |
 
 Nicht gespeichert werden: Passwörter im Klartext, IP-Adressen (die Missbrauchsbremse hält sie nur kurz im
 Arbeitsspeicher), Browser-Kennungen, Tracking- oder Analysedaten. Es gibt keine Drittanbieter-Skripte.
@@ -28,7 +29,7 @@ Anzeige mit Vornamen sollte nur mit Einverständnis der Buchenden gewählt werde
 
 ## Aufbewahrung und Löschung
 
-- Abgelaufene Sitzungen und Anmeldelinks werden automatisch gelöscht.
+- Abgelaufene Sitzungen und Links werden automatisch gelöscht.
 - Versandprotokolle werden nach `RETENTION_NOTIFICATION_DAYS` (Standard 180) Tagen gelöscht, Buchungen optional `RETENTION_BOOKING_DAYS` Tage nach Terminende. Abgehakte oder (teil)bezahlte Termine bleiben davon ausgenommen, weil sie für die Abrechnung gebraucht werden (steuerliche Aufbewahrungspflichten beachten).
 - **Konto löschen** (Profil): Offene/künftige Buchungen werden abgesagt, Mitgliedschaften und Sitzungen
   gelöscht, E-Mail und Name im Konto ersetzt; in Benachrichtigungsprotokollen werden Empfängeradresse und

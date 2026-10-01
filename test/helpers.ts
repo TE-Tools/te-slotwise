@@ -11,7 +11,16 @@ export async function freshDb() {
 
 export async function makeUser(db: NodeDb, email: string, name = email.split('@')[0]) {
   const id = newId();
-  await db.run(`INSERT INTO users (id, email, display_name, email_verified_at, created_at) VALUES (?, ?, ?, ?, ?)`, [id, email, name, nowIso(), nowIso()]);
+  const [first, ...rest] = name.split(' ');
+  await db.run(`INSERT INTO users (id, email, first_name, last_name, display_name, email_verified_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    email,
+    first,
+    rest.join(' ') || 'Test',
+    name,
+    nowIso(),
+    nowIso(),
+  ]);
   return { id, email, display_name: name };
 }
 

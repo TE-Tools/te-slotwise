@@ -2,6 +2,7 @@
 import { loadConfig } from '../src/config.ts';
 import { openNodeDb } from '../src/db-node.ts';
 import { newId, nowIso } from '../src/ids.ts';
+import { hashPassword } from '../src/password.ts';
 import { requestBooking } from '../src/services/bookings.ts';
 import { getOffering, saveOffering } from '../src/services/offerings.ts';
 import { createSeries, createSlot } from '../src/services/slots.ts';
@@ -12,11 +13,17 @@ const config = loadConfig(process.env);
 if (config.production) throw new Error('Demo-Daten nicht in Produktion anlegen.');
 const db = await openNodeDb(config.databasePath);
 
+// Alle Demo-Konten haben das Passwort "demo-passwort".
+const DEMO_PASSWORD = 'demo-passwort';
 async function user(email: string, name: string) {
   const existing = await db.get<{ id: string }>(`SELECT id FROM users WHERE email = ?`, [email]);
   if (existing) return existing.id;
   const id = newId();
-  await db.run(`INSERT INTO users (id, email, display_name, email_verified_at, created_at) VALUES (?, ?, ?, ?, ?)`, [id, email, name, nowIso(), nowIso()]);
+  const [first, last] = name.split(' ');
+  await db.run(
+    `INSERT INTO users (id, email, first_name, last_name, display_name, password_hash, email_verified_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, email, first, last, name, await hashPassword(DEMO_PASSWORD), nowIso(), nowIso()],
+  );
   return id;
 }
 
@@ -51,6 +58,6 @@ await requestBooking(db, config.appUrl, { workspaceId: wsId, slotId: sat, userId
 
 const token = (await db.get<{ public_token: string }>(`SELECT public_token FROM workspaces WHERE id = ?`, [wsId]))!.public_token;
 console.log('Demo-Daten angelegt.');
-console.log(`Anmelden als: lehrkraft@example.test (Anbieter), schuelerin@example.test (Mitglied), besucher@example.test (extern)`);
+console.log(`Anmelden als: lehrkraft@example.test (Anbieter), schuelerin@example.test (Mitglied), besucher@example.test (extern) – Passwort: ${DEMO_PASSWORD}`);
 console.log(`Öffentliche Seite: ${config.appUrl}/p/${token}`);
 db.close();

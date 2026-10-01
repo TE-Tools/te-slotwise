@@ -11,6 +11,10 @@ Für Lehrkräfte gibt es unter **Schüler** eine Abrechnungsübersicht: Standard
 
 TE-Slotwise ist als **App installierbar** (Startbildschirm, wie der Familienplaner) und schickt auf Wunsch **Push-Benachrichtigungen** – einschalten unter Profil → „App & Push-Benachrichtigungen“. Auf dem iPhone zuerst über Safari → Teilen → „Zum Home-Bildschirm“ installieren (Push ab iOS 16.4). Die Push-Schlüssel (VAPID) erzeugt die App beim ersten Bedarf selbst; optional fest vorgeben mit `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` (Secrets) und `VAPID_SUBJECT`.
 
+**Konten:** Registrierung mit Vorname, Nachname, E-Mail und Passwort; die E-Mail-Adresse wird einmal per Link bestätigt. Danach Anmeldung nur mit E-Mail und Passwort. Wer früher per Link angemeldet war, legt über „Passwort vergessen?“ einmalig ein Passwort fest.
+
+**Kalender:** Profil → „Kalender verknüpfen“: persönlicher Abo-Link (webcal/https) für Google, Apple, Outlook usw., Download als .ics, „In Kalender übernehmen“ pro Termin. Für den **Familienplaner** gibt es dieselbe Schnittstelle wie bei Orchester-Orga (`POST /api/login`, `GET /api/me/termine`, siehe `src/routes/api.ts`).
+
 Weitere Dokumente:
 
 - [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md) – Produktgrenzen, Rollen, Architektur, Datenmodell, Buchungsablauf
@@ -37,7 +41,7 @@ Das wendet neue Datenbank-Migrationen auf die Online-Datenbank `te-slotwise-db` 
 npx wrangler pages secret put BREVO_API_KEY --project-name te-slotwise
 ```
 
-E-Mail-Versand online: über **Brevo** (kostenlos, 300 Mails/Tag, gemeinsames Konto mit anderen TE-Apps). Absender (`MAIL_FROM`) muss in Brevo unter „Senders“ bestätigt sein. Alternativ: `EMAILJS_*` (EmailJS) oder `RESEND_API_KEY`. **Ohne E-Mail-Versand ist online keine Anmeldung möglich**, weil Anmeldelinks per E-Mail kommen.
+E-Mail-Versand online: über **Brevo** (kostenlos, 300 Mails/Tag, gemeinsames Konto mit anderen TE-Apps). Absender (`MAIL_FROM`) muss in Brevo unter „Senders“ bestätigt sein. Alternativ: `EMAILJS_*` (EmailJS) oder `RESEND_API_KEY`. **Ohne E-Mail-Versand ist online keine Registrierung möglich**, weil die E-Mail-Adresse per Link bestätigt wird (ebenso „Passwort vergessen“).
 
 Plattform-Admin: Adressen in `ADMIN_EMAILS` (Secret, kommagetrennt) sehen nach der Anmeldung den Menüpunkt „Plattform“ (`/admin`) mit Betriebsübersicht und Test-E-Mail.
 
@@ -58,11 +62,11 @@ Für die lokale Entwicklung ohne Mailserver in `.env` setzen:
 DEV_LOGIN_LINKS=1
 ```
 
-Dann zeigt die Anmeldeseite den Anmeldelink direkt an (es wird ausdrücklich gesagt, dass **keine**
+Dann zeigen Registrierung und „Passwort vergessen“ den Bestätigungs- bzw. Passwort-Link direkt an (es wird ausdrücklich gesagt, dass **keine**
 E-Mail verschickt wurde). Alternativ `MAIL_TRANSPORT=console`: Mails erscheinen in der Serverkonsole.
 
 Demo-Konten nach `npm run seed:demo`: `lehrkraft@example.test` (Anbieter), `schuelerin@example.test`
-(Mitglied einer Gruppe), `besucher@example.test` (extern). Anmeldung jeweils per Link.
+(Mitglied einer Gruppe), `besucher@example.test` (extern). Passwort jeweils `demo-passwort`.
 
 ## Befehle
 
@@ -92,7 +96,7 @@ Umgebungsvariablen des Servers, nie ins Repository.
 | `SMTP_URL` | SMTP-Zugang, z. B. `smtps://benutzer:passwort@smtp.example.com:465`. Ohne diese Variable wird **nichts** versendet. |
 | `MAIL_FROM` | Absender, z. B. `Slotwise <noreply@example.de>` |
 | `MAIL_TRANSPORT=console` | Nur Entwicklung: Mails in der Konsole ausgeben statt senden |
-| `DEV_LOGIN_LINKS=1` | Nur Entwicklung: Anmeldelinks auf der Seite zeigen, wenn kein Versand eingerichtet ist. Wird bei `NODE_ENV=production` ignoriert. |
+| `DEV_LOGIN_LINKS=1` | Nur Entwicklung: Bestätigungs- und Passwort-Links auf der Seite zeigen, wenn kein Versand eingerichtet ist. Wird bei `NODE_ENV=production` ignoriert. |
 | `TRUST_PROXY=1` | Hinter einem Reverse-Proxy: Client-IP aus `X-Forwarded-For` für die Missbrauchsbremse verwenden |
 | `NODE_ENV=production` | Produktionsbetrieb |
 | `OPERATOR_NAME`, `OPERATOR_ADDRESS`, `OPERATOR_EMAIL`, `OPERATOR_PHONE` | Angaben für Impressum und Datenschutz (Adresszeilen mit senkrechtem Strich trennen) |

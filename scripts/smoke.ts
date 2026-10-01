@@ -22,11 +22,11 @@ class Client {
     return res;
   }
   async login(email: string, name: string) {
-    const html = await (await this.req('/login', { email, next: '', mode: 'link' })).text();
+    const [first, ...rest] = name.split(' ');
+    const html = await (await this.req('/register', { first_name: first, last_name: rest.join(' ') || 'Test', email, password: 'rauchtest-start-1', password2: 'rauchtest-start-1', next: '' })).text();
     const token = /verify\?token=([A-Za-z0-9_-]+)/.exec(html)?.[1];
-    if (!token) throw new Error('Kein Dev-Anmeldelink: ' + html.slice(0, 300));
+    if (!token) throw new Error('Kein Dev-Bestätigungslink: ' + html.slice(0, 300));
     await this.req('/auth/verify', { token });
-    await this.req('/profile', { display_name: name, notify_booking_updates: '1' });
   }
 }
 
@@ -95,18 +95,18 @@ check(pubWeek.includes('ev-reluctant') || pubWeek4.includes('ev-reluctant'), 'Ge
 
 // --- Passwort ---
 const pwSet = await kunde.req('/profile/password', { new_password: 'rauchtest-pw-123', new_password2: 'rauchtest-pw-123' });
-check(/password_saved/.test(loc(pwSet)), 'Passwort festgelegt');
+check(/password_saved/.test(loc(pwSet)), 'Passwort geändert');
 const pwClient = new Client();
-const pwLogin = await pwClient.req('/login', { email: kundeEmail, password: 'rauchtest-pw-123', mode: 'password' });
+const pwLogin = await pwClient.req('/login', { email: kundeEmail, password: 'rauchtest-pw-123' });
 check(pwLogin.status === 303 && (await pwClient.req('/dashboard')).status === 200, 'Anmeldung mit Passwort');
-const pwWrong = await new Client().req('/login', { email: kundeEmail, password: 'falsches-passwort', mode: 'password' });
+const pwWrong = await new Client().req('/login', { email: kundeEmail, password: 'falsches-passwort' });
 check(pwWrong.status === 400, 'Falsches Passwort abgewiesen');
 
 // --- Seiten laden ---
 const cal = await owner.req(`/w/${wsId}/calendar?week=${day(3)}`);
 const calHtml = await cal.text();
 check(cal.status === 200 && calHtml.includes('Karla Kunde') && calHtml.includes('week-cell'), 'Anbieter-Kalender mit klickbaren Stunden');
-for (const p of [`/w/${wsId}`, `/w/${wsId}/slots`, `/w/${wsId}/slots/new`, `/w/${wsId}/members`, `/w/${wsId}/offerings`, `/w/${wsId}/notifications`, `/w/${wsId}/students`, `/w/${wsId}/students/check`, `/w/${wsId}/students?year=2026`, `/manifest.webmanifest`, `/sw.js`, '/impressum', '/datenschutz', '/bookings', '/profile']) {
+for (const p of [`/w/${wsId}`, `/w/${wsId}/slots`, `/w/${wsId}/slots/new`, `/w/${wsId}/members`, `/w/${wsId}/offerings`, `/w/${wsId}/notifications`, `/w/${wsId}/students`, `/w/${wsId}/students/check`, `/w/${wsId}/students?year=2026`, `/manifest.webmanifest`, `/sw.js`, '/calendar.ics', '/impressum', '/datenschutz', '/bookings', '/profile']) {
   const r = await owner.req(p);
   check(r.status === 200, `Seite ${p}`);
 }

@@ -57,6 +57,9 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   push_none: { text: 'Auf keinem Gerät ist Push eingeschaltet.', kind: 'info' },
   push_rate: { text: 'Bitte warte kurz, bevor du erneut testest.', kind: 'error' },
   push_device_removed: { text: 'Gerät entfernt – es bekommt keine Push-Benachrichtigungen mehr.', kind: 'ok' },
+  name_required: { text: 'Bitte Vor- und Nachnamen angeben.', kind: 'error' },
+  calendar_rotated: { text: 'Neuer Kalender-Link erzeugt. Trage ihn in deinen Kalendern neu ein – der alte funktioniert nicht mehr.', kind: 'ok' },
+  app_revoked: { text: 'Verbindung getrennt.', kind: 'ok' },
   money_invalid: { text: 'Ungültiger Betrag – bitte z. B. 25 oder 25,50 eingeben. Nichts wurde gespeichert.', kind: 'error' },
   lessons_saved: { text: 'Gespeichert.', kind: 'ok' },
   lesson_added: { text: 'Termin eingetragen.', kind: 'ok' },
@@ -151,7 +154,7 @@ export function layout(o: LayoutOpts): H {
         ${o.isAdmin ? html`<a href="/admin">Plattform</a>` : ''}
         <form method="post" action="/logout" class="inline"><button class="linklike" type="submit">Abmelden</button></form>
       </nav>`
-    : html`<nav class="topnav" aria-label="Hauptnavigation"><a href="/login">Anmelden</a></nav>`}
+    : html`<nav class="topnav" aria-label="Hauptnavigation"><a href="/login">Anmelden</a> <a href="/register">Registrieren</a></nav>`}
 </header>
 <div class="shell ${o.ws ? 'with-subnav' : ''}">
   ${o.ws ? wsNav(o.ws, o.section) : ''}
@@ -187,10 +190,10 @@ export function when(startIso: string, endIso: string, tz: string, opts: { long?
 }
 
 /** Teilen-Box: Web Share API (falls verfügbar) und immer „Link kopieren“. */
-export function shareBox(url: string, title: string, hint?: string): H {
+export function shareBox(url: string, title: string, hint?: string, label = 'Link zum Teilen'): H {
   const id = `share-${Math.abs(hashCode(url))}`;
   return html`<div class="share">
-    <label for="${id}">Link zum Teilen</label>
+    <label for="${id}">${label}</label>
     <div class="share-row">
       <input id="${id}" type="text" readonly value="${url}" class="share-input">
       <button type="button" class="btn" data-copy="${id}">Link kopieren</button>
