@@ -430,8 +430,8 @@ export async function occupiedTimes(db: Db, wsId: string, membershipId: string |
 
 /**
  * „Woche wiederholen“: Alle Slots einer Woche (ab Montag `weekStart`) werden in die folgenden Wochen
- * übernommen – gleiche Uhrzeit (Ortszeit), gleiche Einstellungen, ohne Buchungen. Geschlossene Slots
- * (z. B. einzeln eingetragene Stunden) und Zeitfenster bleiben außen vor; Überschneidungen werden übersprungen.
+ * übernommen – gleiche Uhrzeit (Ortszeit), gleiche Einstellungen, ohne Buchungen; feste Slots und freie
+ * Zeitfenster. Geschlossene Slots (z. B. einzeln eingetragene Stunden) bleiben außen vor; Überschneidungen werden übersprungen.
  */
 export async function repeatWeek(db: Db, wsId: string, weekStart: string, tz: string, weeks: number, everyWeeks = 1) {
   weeks = Math.max(1, Math.min(52, Math.floor(weeks)));
@@ -439,7 +439,7 @@ export async function repeatWeek(db: Db, wsId: string, weekStart: string, tz: st
   const from = new Date(localToUtc(weekStart, '00:00', tz)).toISOString();
   const to = new Date(localToUtc(addDays(weekStart, 7), '00:00', tz)).toISOString();
   const source = await db.all<Slot>(
-    `SELECT * FROM slots WHERE workspace_id = ? AND starts_at >= ? AND starts_at < ? AND kind = 'fixed' AND status <> 'closed' ORDER BY starts_at`,
+    `SELECT * FROM slots WHERE workspace_id = ? AND starts_at >= ? AND starts_at < ? AND status <> 'closed' ORDER BY starts_at`,
     [wsId, from, to],
   );
   if (weeks * source.length > MAX_SERIES_SLOTS) throw new SlotError(`Das wären ${weeks * source.length} Slots – höchstens ${MAX_SERIES_SLOTS} auf einmal.`);
@@ -475,7 +475,7 @@ export async function repeatWeek(db: Db, wsId: string, weekStart: string, tz: st
           continue;
         }
         await insertSlot(db, wsId, off, sl.series_id, start, sl.timezone, {
-          kind: 'fixed',
+          kind: sl.kind,
           durationMin: duration,
           bufferMin: sl.buffer_min,
           capacity: sl.capacity,

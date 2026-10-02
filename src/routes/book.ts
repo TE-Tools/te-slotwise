@@ -23,6 +23,20 @@ interface ViewCtx {
   loginHref: string;
 }
 
+/** Freie Startzeiten in einem Zeitfenster (15-Minuten-Raster, ohne Überschneidung mit festen Buchungen, nicht in der Vergangenheit). */
+export function freeStarts(s: Pick<VisibleSlotRow, 'starts_at' | 'ends_at' | 'timezone' | 'duration_min'>, busy: { starts_at: string; ends_at: string }[], now = Date.now()) {
+  const start = Date.parse(s.starts_at);
+  const end = Date.parse(s.ends_at);
+  const dur = s.duration_min * 60_000;
+  const out: { time: string; until: string }[] = [];
+  for (let t = start; t + dur <= end; t += 15 * 60_000) {
+    if (t <= now) continue;
+    if (busy.some((b) => Date.parse(b.starts_at) < t + dur && Date.parse(b.ends_at) > t)) continue;
+    out.push({ time: localTime(t, s.timezone), until: localTime(t + dur, s.timezone) });
+  }
+  return out;
+}
+
 function slotItem(s: VisibleSlotRow, v: ViewCtx, busy: { starts_at: string; ends_at: string }[]): H {
   const start = Date.parse(s.starts_at);
   const end = Date.parse(s.ends_at);
@@ -37,14 +51,17 @@ function slotItem(s: VisibleSlotRow, v: ViewCtx, busy: { starts_at: string; ends
   if (!s.my_status) {
     if (!v.loggedIn) action = html`<a class="btn" href="${v.loginHref}">Anmelden, um zu ${s.mode === 'auto' ? 'buchen' : 'anfragen'}</a>`;
     else if (s.kind === 'window') {
-      const latest = end - s.duration_min * 60_000;
-      action = html`<form method="post" action="${v.bookAction(s.id)}" class="stack">
-        <div class="field"><label for="t-${s.id}">Wunschbeginn (${durationLabel(s.duration_min)})</label>
-          <input id="t-${s.id}" type="time" name="time" required step="300" min="${localTime(start, tz)}" max="${localTime(latest, tz)}" value="${localTime(start, tz)}">
-          <span class="hint">Zwischen ${localTime(start, tz)} und ${localTime(latest, tz)} Uhr, in 5-Minuten-Schritten.</span></div>
-        ${note}
-        <button class="btn" type="submit">${verb}</button>
-      </form>`;
+      // Freie Startzeiten im Viertelstunden-Raster; schon fest vergebene Zeiten fallen weg.
+      const free = freeStarts(s, busy);
+      action = free.length
+        ? html`<form method="post" action="${v.bookAction(s.id)}" class="stack">
+            <div class="field"><label for="t-${s.id}">Deine Startzeit (${durationLabel(s.duration_min)})</label>
+              <select id="t-${s.id}" name="time" required>${free.map((t) => html`<option value="${t.time}">${t.time} – ${t.until} Uhr</option>`)}</select>
+              <span class="hint">Freie Zeiten zwischen ${localTime(start, tz)} und ${localTime(end, tz)} Uhr.</span></div>
+            ${note}
+            <button class="btn" type="submit">${verb}</button>
+          </form>`
+        : html`<p class="muted">In diesem Zeitfenster ist keine Zeit mehr frei.</p>`;
     } else {
       action = html`<form method="post" action="${v.bookAction(s.id)}" class="stack">${note}<button class="btn" type="submit">${verb}</button></form>`;
     }
@@ -106,8 +123,8 @@ async function slotsView(c: Ctx, v: ViewCtx, membershipId: string | null, userId
         start: Date.parse(sl.starts_at),
         end: Date.parse(sl.ends_at),
         title: sl.my_status ? 'Deine Anfrage' : sl.offering_name,
-        detail: sl.preference === 'reluctant' ? 'eher ungern, nur Anfrage' : sl.mode === 'auto' ? 'sofort buchbar' : 'auf Anfrage',
-        href: sl.kind === 'fixed' && !sl.my_status ? v.slotPage(sl.id) : sl.my_status ? '/bookings' : q({ view: 'list', day: d }) + `#s-${sl.id}`,
+        detail: sl.kind === 'window' ? 'Zeit selbst wählen' : sl.preference === 'reluctant' ? 'eher ungern, nur Anfrage' : sl.mode === 'auto' ? 'sofort buchbar' : 'auf Anfrage',
+        href: !sl.my_status ? v.slotPage(sl.id) : '/bookings',
         kind: sl.my_status ? 'mine' : sl.preference === 'reluctant' ? 'reluctant' : 'free',
         background: sl.kind === 'window' && !sl.my_status,
       });
@@ -254,8 +271,8 @@ export function registerBookRoutes(app: Hono<AppEnv>) {
     }
     return [
       flash(c.req.query('msg')),
-      pageHeader(slot.mode === 'auto' ? 'Termin buchen' : 'Termin anfragen', v.ws.name),
-      html`<ul class="slots">${slotItem(slot, v, [])}</ul><p><a href="${backHref}">← Zurück zum Kalender</a></p>`,
+      pageHeader(slot.mode === 'auto' ? 'Termin buchen' : 'Termin anfragen', `${formatDate(Date.parse(slot.starts_at), slot.timezone, true)} · ${v.ws.name}`),
+      html`<ul class="slots">${slotItem(slot, v, slot.kind === 'window' ? ((await busyTimes(db, v.ws.id, [slot.id])).get(slot.id) ?? []) : [])}</ul><p><a href="${backHref}">← Zurück zum Kalender</a></p>`,
     ];
   };
 

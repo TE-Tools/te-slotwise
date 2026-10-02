@@ -500,3 +500,38 @@ test('Slots einfach anlegen: jede Woche für 4 Wochen; feste wöchentliche Stund
   assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM bookings WHERE user_id = ? AND status = 'confirmed'`, [fid]))!.n, 4);
   assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM notifications WHERE recipient_user_id = ?`, [fid]))!.n - before, 1);
 });
+
+test('Freies Zeitfenster: Lehrkraft gibt von–bis frei, Schüler:innen wählen ihre Startzeit', async () => {
+  const { app, mailer, db } = await setup();
+  const owner = await login(app, mailer, 'fenster@example.com', 'Frieda Fenster');
+  const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Cello', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
+  const offId = /offerings\/([^?]+)/.exec((await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Cellostunde', duration_min: '45', confirmation_mode: 'auto', visibility: 'internal' } })).headers.get('location')!)![1];
+  assert.match(await (await owner.req(`/w/${wsId}/slots/new`)).text(), /Freies Zeitfenster/);
+  const day = futureDate(5);
+  const r = await owner.req(`/w/${wsId}/slots/series`, { method: 'POST', form: { offering_id: offId, kind: 'window', from: day, window_start: '16:00', window_end: '18:00', repeat: 'weekly', weeks: '3' } });
+  assert.match(r.headers.get('location')!, /msg=windows_created&n=3/);
+  const slotId = (await db.get<{ id: string }>(`SELECT id FROM slots WHERE workspace_id = ? AND kind = 'window' ORDER BY starts_at LIMIT 1`, [wsId]))!.id;
+
+  const kid = await login(app, mailer, 'wahl@example.com', 'Willi Wahl');
+  const kidId = (await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'wahl@example.com'`))!.id;
+  await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES ('m-willi', ?, ?, 'member', ?)`, [wsId, kidId, new Date().toISOString()]);
+  // Im Wochenkalender führt das Zeitfenster direkt zur Zeitauswahl.
+  const week = await (await kid.req(`/w/${wsId}/book?week=${day}`)).text();
+  assert.match(week, new RegExp(`/w/${wsId}/slots/${slotId}/book`));
+  assert.match(week, /Zeit selbst wählen/);
+  const page = await (await kid.req(`/w/${wsId}/slots/${slotId}/book`)).text();
+  assert.match(page, /<option value="16:00">16:00 – 16:45 Uhr<\/option>/);
+  assert.match(page, /<option value="17:15">17:15 – 18:00 Uhr<\/option>/);
+  assert.doesNotMatch(page, /value="17:30"/); // 17:30 + 45 Min. passt nicht mehr ins Fenster
+  const booked = await kid.req(`/w/${wsId}/slots/${slotId}/book`, { method: 'POST', form: { time: '16:30' } });
+  assert.match(booked.headers.get('location')!, /booked_confirmed/);
+  // Für andere sind Zeiten, die sich mit 16:30–17:15 überschneiden, weg.
+  const other = await login(app, mailer, 'zweite@example.com', 'Zora Zweit');
+  const oid = (await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'zweite@example.com'`))!.id;
+  await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES ('m-zora', ?, ?, 'member', ?)`, [wsId, oid, new Date().toISOString()]);
+  const page2 = await (await other.req(`/w/${wsId}/slots/${slotId}/book`)).text();
+  assert.doesNotMatch(page2, /value="16:00"|value="16:15"|value="16:30"|value="17:00"/);
+  assert.match(page2, /value="17:15"/);
+  // „Woche wiederholen“ übernimmt auch Zeitfenster.
+  assert.match(await (await owner.req(`/w/${wsId}/calendar?week=${day}`)).text(), /Woche übernehmen/);
+});

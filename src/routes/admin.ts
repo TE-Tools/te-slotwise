@@ -639,7 +639,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
       can(ws.role, 'slots.manage')
         ? html`<section class="card repeat-week"><h2>Woche wiederholen</h2>
             ${(() => {
-              const n = slots.filter((sl) => sl.kind === 'fixed' && sl.status !== 'closed' && Date.parse(sl.starts_at) >= Date.parse(fromIso)).length;
+              const n = slots.filter((sl) => sl.status !== 'closed' && Date.parse(sl.starts_at) >= Date.parse(fromIso)).length;
               return n
                 ? html`<p>Diese Woche hat <strong>${n === 1 ? 'einen Slot' : `${n} Slots`}</strong>. Übernimm sie mit gleichen Uhrzeiten in die nächsten Wochen – ohne Buchungen, vorhandene Slots bleiben unberührt.</p>
                     <form method="post" action="/w/${ws.id}/slots/repeat-week" class="filters">
@@ -864,6 +864,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     const to = `${String(Math.floor(toMin / 60)).padStart(2, '0')}:${String(toMin % 60).padStart(2, '0')}`;
     const weekday = isoWeekday(date);
     const repeat = oneOf(c.req.query('repeat') ?? '', ['once', 'weekly', 'biweekly'] as const, 'weekly');
+    const kind = oneOf(c.req.query('kind') ?? '', ['fixed', 'window'] as const, 'fixed');
     const common = slotCommonFields(c, ws, { capacity: off.default_capacity, location: null, online: null, mode: '', visibility: 'inherit', status: 'published', buffer: off.buffer_min, preference: 'normal' }, { groupIds: [], membershipIds: [] });
     const offeringField =
       offerings.length === 1
@@ -881,6 +882,13 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
           <label>Von <input type="time" name="window_start" required step="300" value="${from}"></label>
           <label>Bis <input type="time" name="window_end" required step="300" value="${to}"></label>
         </div>
+        <fieldset class="field repeat-choice"><legend>Art</legend>
+          <div class="segmented-radio">
+            <label><input type="radio" name="kind" value="fixed" ${checked(kind === 'fixed')}> Feste Termine</label>
+            <label><input type="radio" name="kind" value="window" ${checked(kind === 'window')}> Freies Zeitfenster</label>
+          </div>
+          <span class="hint">Feste Termine: Die Zeit wird in Termine der Angebotsdauer aufgeteilt. Freies Zeitfenster: Schüler:innen wählen innerhalb von „Von–Bis“ selbst ihre Startzeit.</span>
+        </fieldset>
         <fieldset class="field repeat-choice"><legend>Wiederholen</legend>
           <div class="segmented-radio">
             <label><input type="radio" name="repeat" value="once" ${checked(repeat === 'once')}> Einmalig</label>
@@ -984,7 +992,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         readSlotInput(f, off, kind, int(f, 'duration', 5, 1440, off.duration_min)),
       );
       if (!r.created) return newSlotsPage(c, ws, r.skipped ? 'Keine neuen Slots: Alle Zeiten überschneiden sich mit vorhandenen Slots.' : 'Keine Slots angelegt – ist die Zeitspanne mindestens so lang wie ein Termin?');
-      return c.redirect(`/w/${ws.id}/calendar?week=${from}&msg=slots_created&n=${r.created}&k=${r.skipped}`, 303);
+      return c.redirect(`/w/${ws.id}/calendar?week=${from}&msg=${kind === 'window' ? 'windows_created' : 'slots_created'}&n=${r.created}&k=${r.skipped}`, 303);
     } catch (e) {
       if (e instanceof SlotError || e instanceof LocalTimeError) return newSlotsPage(c, ws, e.message);
       throw e;
