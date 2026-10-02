@@ -503,6 +503,15 @@ test('Slots einfach anlegen: jede Woche für 4 Wochen; feste wöchentliche Stund
   assert.match(add.headers.get('location')!, /msg=lessons_added&n=4&k=0/);
   assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM bookings WHERE user_id = ? AND status = 'confirmed'`, [fid]))!.n, 4);
   assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM notifications WHERE recipient_user_id = ?`, [fid]))!.n - before, 1);
+
+  // Verschieben durch die Lehrkraft: standardmäßig direkt (bleibt bestätigt, Schülerin wird informiert), optional nur Vorschlag.
+  const [b1, b2] = await db.all<{ id: string }>(`SELECT id FROM bookings WHERE user_id = ? ORDER BY starts_at LIMIT 2`, [fid]);
+  assert.match(await (await owner.req(`/w/${wsId}/bookings`)).text(), /Nur vorschlagen/);
+  assert.match((await owner.req(`/w/${wsId}/bookings/${b1.id}/propose`, { method: 'POST', form: { date: futureDate(4), time: '19:00', duration: '30', mode: 'direct' } })).headers.get('location')!, /msg=booking_moved/);
+  assert.equal((await db.get<{ s: string; p: string | null }>(`SELECT status AS s, proposed_by AS p FROM bookings WHERE id = ?`, [b1.id]))!.p, null);
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM notifications WHERE recipient_user_id = ? AND template = 'booking_moved'`, [fid]))!.n, 1);
+  assert.match((await owner.req(`/w/${wsId}/bookings/${b2.id}/propose`, { method: 'POST', form: { date: futureDate(11), time: '19:00', duration: '30', mode: 'propose' } })).headers.get('location')!, /msg=proposal_sent/);
+  assert.equal((await db.get<{ p: string | null }>(`SELECT proposed_by AS p FROM bookings WHERE id = ?`, [b2.id]))!.p, 'provider');
 });
 
 test('Freies Zeitfenster: Lehrkraft gibt von–bis frei, Schüler:innen wählen ihre Startzeit', async () => {
@@ -727,6 +736,27 @@ test('Schüler:in ohne App: nur Name und Instrument, feste Stunden sofort bestä
     assert.equal(res.status, 200, path);
   }
   assert.match(await (await owner.req(`/w/${wsId}/students/list.csv`)).text(), /Paul Pfeife;;Orgel/);
+
+  // Verschieben: bei Schüler:innen ohne App sofort gültig und bestätigt – kein „Wartet auf Buchende“.
+  const first = (await db.get<{ id: string; starts_at: string }>(`SELECT id, starts_at FROM bookings WHERE user_id = ? ORDER BY starts_at LIMIT 1`, [pid]))!;
+  const bookingsPage = await (await owner.req(`/w/${wsId}/bookings`)).text();
+  assert.doesNotMatch(bookingsPage, /Nur vorschlagen/);
+  const moved = await owner.req(`/w/${wsId}/bookings/${first.id}/propose`, { method: 'POST', form: { date: futureDate(3), time: '18:15', duration: '45', note: '', mode: 'propose' } });
+  assert.match(moved.headers.get('location')!, /msg=booking_moved/);
+  const after = (await db.get<{ status: string; starts_at: string; proposed_by: string | null }>(`SELECT status, starts_at, proposed_by FROM bookings WHERE id = ?`, [first.id]))!;
+  assert.equal(after.status, 'confirmed');
+  assert.equal(after.proposed_by, null);
+  assert.notEqual(after.starts_at, first.starts_at);
+  assert.equal(mailer.sent.length, sent);
+  // Ein schon offener eigener Vorschlag lässt sich direkt übernehmen.
+  await db.run(`UPDATE bookings SET proposed_starts_at = ?, proposed_ends_at = ?, proposed_by = 'provider' WHERE id = ?`, [
+    new Date(Date.parse(after.starts_at) + 3600_000).toISOString(),
+    new Date(Date.parse(after.starts_at) + 3600_000 + 45 * 60_000).toISOString(),
+    first.id,
+  ]);
+  assert.match(await (await owner.req(`/w/${wsId}/bookings`)).text(), /Vorschlag direkt übernehmen/);
+  assert.match((await owner.req(`/w/${wsId}/bookings/${first.id}/apply-proposal`, { method: 'POST', form: {} })).headers.get('location')!, /msg=booking_moved/);
+  assert.equal((await db.get<{ p: string | null }>(`SELECT proposed_by AS p FROM bookings WHERE id = ?`, [first.id]))!.p, null);
 
   // Platzhalter-Adressen lassen sich weder registrieren noch anmelden.
   const placeholder = (await db.get<{ email: string }>(`SELECT email FROM users WHERE id = ?`, [pid]))!.email;

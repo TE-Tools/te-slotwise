@@ -39,6 +39,7 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   retry_done: { text: 'Neuer Versandversuch ausgeführt – Status siehe Liste.', kind: 'info' },
   last_owner: { text: 'Der letzte Eigentümer kann nicht entfernt oder herabgestuft werden.', kind: 'error' },
   sole_owner: { text: 'Konto kann nicht gelöscht werden: Du bist alleinige:r Eigentümer:in eines Arbeitsbereichs. Übertrage oder lösche ihn zuerst.', kind: 'error' },
+  booking_moved: { text: 'Termin verschoben – die neue Zeit gilt sofort und ist bestätigt.', kind: 'ok' },
   proposal_sent: { text: 'Vorschlag gesendet. Die andere Seite muss zustimmen, erst dann gilt die neue Zeit.', kind: 'ok' },
   proposal_accepted: { text: 'Vorschlag angenommen – der Termin ist jetzt fest.', kind: 'ok' },
   proposal_rejected: { text: 'Vorschlag abgelehnt. Es gilt die bisherige Zeit.', kind: 'info' },

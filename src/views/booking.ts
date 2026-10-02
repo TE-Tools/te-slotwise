@@ -23,8 +23,12 @@ export function awaitingLabel(b: Pick<BookingTimes, 'status' | 'proposed_by'>, v
     : html`<span class="badge badge-muted">Wartet auf ${viewer === 'provider' ? 'Buchende' : 'Anbieter'}</span>`;
 }
 
-/** Formular "Andere Zeit vorschlagen" – Eingabe in der Zeitzone des Termins. */
-export function timeChangeForm(action: string, b: BookingTimes, label: string): H {
+/**
+ * Formular "Andere Zeit vorschlagen" – Eingabe in der Zeitzone des Termins.
+ * Für die Anbieterseite (`provider`) wird standardmäßig direkt verschoben; nur vorschlagen ist optional
+ * (nicht bei Schüler:innen ohne App – die können nicht zustimmen).
+ */
+export function timeChangeForm(action: string, b: BookingTimes, label: string, provider?: { offline: boolean }): H {
   const s = Date.parse(b.starts_at);
   const minutes = Math.round((Date.parse(b.ends_at) - s) / 60000);
   return html`<details class="inline-form">
@@ -34,8 +38,15 @@ export function timeChangeForm(action: string, b: BookingTimes, label: string): 
       <label>Beginn <input type="time" name="time" required step="300" value="${localTime(s, b.timezone)}"></label>
       <label>Dauer (Min.) <input type="number" name="duration" min="5" max="1440" step="5" required value="${minutes}"></label>
       <label class="span-all">Hinweis (optional) <input type="text" name="note" maxlength="500"></label>
-      <p class="hint span-all">Zeitzone: ${b.timezone}. Die andere Seite muss zustimmen, erst dann gilt die neue Zeit.</p>
-      <button class="btn" type="submit">Vorschlag senden</button>
+      ${provider
+        ? provider.offline
+          ? html`<input type="hidden" name="mode" value="direct"><p class="hint span-all">Zeitzone: ${b.timezone}. Die neue Zeit gilt sofort, der Termin bleibt bestätigt.</p>`
+          : html`<fieldset class="span-all segmented-radio"><legend class="sr-only">Wie verschieben?</legend>
+              <label class="check"><input type="radio" name="mode" value="direct" checked> Direkt verschieben – gilt sofort und bleibt bestätigt, Schüler:in wird informiert</label>
+              <label class="check"><input type="radio" name="mode" value="propose"> Nur vorschlagen – Schüler:in muss zustimmen</label>
+            </fieldset><p class="hint span-all">Zeitzone: ${b.timezone}.</p>`
+        : html`<p class="hint span-all">Zeitzone: ${b.timezone}. Die andere Seite muss zustimmen, erst dann gilt die neue Zeit.</p>`}
+      <button class="btn" type="submit">${provider ? 'Verschieben' : 'Vorschlag senden'}</button>
     </form>
   </details>`;
 }
