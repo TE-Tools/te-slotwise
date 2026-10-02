@@ -552,7 +552,7 @@ export async function listWorkspaceBookings(db: Db, wsId: string, f: BookingFilt
        (SELECT g.name FROM ws_groups g WHERE g.id = b.group_id) AS group_name,
        b.proposed_starts_at, b.proposed_ends_at, b.proposed_by, b.proposal_note, b.slot_id, b.offering_id,
        o.name AS offering_name, s.id AS slot_id, s.kind AS slot_kind,
-       u.display_name AS booker_name, u.email AS booker_email, u.id AS user_id,
+       u.display_name AS booker_name, CASE WHEN u.email LIKE '%@ohne-app.invalid' THEN '' ELSE u.email END AS booker_email, u.id AS user_id,
        EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = b.workspace_id AND m.user_id = b.user_id) AS is_member,
        (SELECT COUNT(*) FROM bookings x WHERE x.workspace_id = b.workspace_id AND x.id <> b.id AND x.status IN ('requested','confirmed')
           AND x.starts_at < b.ends_at AND x.ends_at > b.starts_at) AS conflicts
@@ -566,7 +566,7 @@ export async function listWorkspaceBookings(db: Db, wsId: string, f: BookingFilt
 /** Personen, die in diesem Arbeitsbereich gebucht haben oder Mitglied sind – für den Personenfilter. */
 export async function bookingPeople(db: Db, wsId: string) {
   return await db.all<{ user_id: string; display_name: string; email: string }>(
-    `SELECT u.id AS user_id, u.display_name, u.email FROM users u WHERE u.id IN (
+    `SELECT u.id AS user_id, u.display_name, CASE WHEN u.email LIKE '%@ohne-app.invalid' THEN '' ELSE u.email END AS email FROM users u WHERE u.id IN (
        SELECT user_id FROM bookings WHERE workspace_id = ? UNION SELECT user_id FROM memberships WHERE workspace_id = ?)
      ORDER BY u.display_name COLLATE NOCASE`,
     [wsId, wsId],

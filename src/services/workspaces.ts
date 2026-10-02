@@ -1,6 +1,7 @@
 import type { Role } from '../authz.ts';
 import type { Db } from '../db.ts';
 import { hashToken, newId, newToken, nowIso } from '../ids.ts';
+import { isOfflineEmail, OFFLINE_DOMAIN } from '../offline.ts';
 
 export interface Workspace {
   id: string;
@@ -340,4 +341,52 @@ export async function acceptInvitation(
 
 function rank(role: Role) {
   return { owner: 0, admin: 1, staff: 2, member: 3 }[role];
+}
+
+/**
+ * Schüler:in ohne App anlegen (nur Name, optional Gruppe/Instrument): Konto mit Platzhalter-Adresse,
+ * Mitgliedschaft im Bereich. Termine trägt die Lehrkraft danach direkt als fest ein.
+ */
+export async function createOfflineStudent(
+  db: Db,
+  wsId: string,
+  p: { firstName: string; lastName: string; groupId: string | null; newGroupName: string },
+): Promise<string> {
+  return await db.tx(async () => {
+    const userId = newId();
+    const now = nowIso();
+    const name = `${p.firstName} ${p.lastName}`.trim();
+    await db.run(
+      `INSERT INTO users (id, email, first_name, last_name, display_name, notify_booking_updates, notify_new_requests, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, ?)`,
+      [userId, `${userId}@${OFFLINE_DOMAIN}`, p.firstName, p.lastName, name, now],
+    );
+    const membershipId = newId();
+    await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES (?, ?, ?, 'member', ?)`, [membershipId, wsId, userId, now]);
+    let groupId = p.groupId;
+    if (!groupId && p.newGroupName) {
+      const existing = await db.get<{ id: string }>(`SELECT id FROM ws_groups WHERE workspace_id = ? AND name = ? COLLATE NOCASE`, [wsId, p.newGroupName]);
+      groupId = existing?.id ?? (await saveGroup(db, wsId, null, { name: p.newGroupName, description: '' }));
+    }
+    if (groupId) await addToGroup(db, wsId, groupId, membershipId);
+    return userId;
+  });
+}
+
+/**
+ * Name einer Schüler:in ohne App ändern oder eine E-Mail nachtragen. Mit E-Mail kann sich die Person
+ * danach selbst registrieren und übernimmt dabei dieses Konto samt allen Terminen.
+ */
+export async function updateOfflineStudent(
+  db: Db,
+  userId: string,
+  p: { firstName: string; lastName: string; email: string },
+): Promise<'ok' | 'email_taken' | 'not_offline'> {
+  const u = await db.get<{ email: string }>(`SELECT email FROM users WHERE id = ? AND deleted_at IS NULL`, [userId]);
+  if (!u || !isOfflineEmail(u.email)) return 'not_offline';
+  if (p.email && (await db.get(`SELECT 1 FROM users WHERE email = ? AND id <> ?`, [p.email, userId]))) return 'email_taken';
+  await db.run(
+    `UPDATE users SET first_name = ?, last_name = ?, display_name = ?, email = ?, notify_booking_updates = ?, notify_new_requests = 1 WHERE id = ?`,
+    [p.firstName, p.lastName, `${p.firstName} ${p.lastName}`.trim(), p.email || u.email, p.email ? 1 : 0, userId],
+  );
+  return 'ok';
 }

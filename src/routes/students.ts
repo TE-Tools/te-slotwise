@@ -36,8 +36,8 @@ import {
   type Totals,
 } from '../services/billing.ts';
 import { getOffering, listOfferings } from '../services/offerings.ts';
-import { readContact, updateContact } from '../services/auth.ts';
-import { addToGroup, listGroups, myGroups } from '../services/workspaces.ts';
+import { normalizeEmail, readContact, updateContact } from '../services/auth.ts';
+import { addToGroup, createOfflineStudent, listGroups, myGroups, updateOfflineStudent } from '../services/workspaces.ts';
 import { contactFields } from '../views/contact.ts';
 import { addDays, durationLabel, formatDate, formatTime, LocalTimeError, localDate, localToUtc } from '../time.ts';
 import { MONTHS } from '../views/calendar.ts';
@@ -51,7 +51,23 @@ const page = (c: Ctx, ws: WsContext, title: string, body: Frag | Frag[], status:
   render(c, { title: `${title} – ${ws.name}`, ws, section: 'students', body, wide: true }, status);
 
 const ATTENDANCE_VALUES = ['', 'attended', 'absent_billed', 'absent'] as const;
-const studentName = (s: { display_name: string; email: string }) => s.display_name || s.email;
+const studentName = (s: { display_name: string; email: string }) => s.display_name || s.email || 'Ohne Namen';
+const offlineBadge = html`<span class="badge badge-muted" title="Ohne App angelegt – bekommt keine E-Mails">ohne App</span>`;
+
+/** Formular: Schüler:in ohne App anlegen – nur Name und Instrument (Gruppe). */
+function newStudentForm(ws: WsContext, groups: { id: string; name: string }[]): H {
+  return html`<section class="card" id="neu"><h2>Schüler:in ohne App eintragen</h2>
+    <p class="hint">Für alle, die die App nicht nutzen: nur Name und Instrument. Danach trägst du die feste Stunde ein – sie zählt sofort als bestätigt und erscheint in Kalender und Abrechnung. Eine E-Mail kannst du später nachtragen.</p>
+    <form method="post" action="/w/${ws.id}/students/new" class="grid-form">
+      <label>Vorname <input name="first_name" required maxlength="60" autocomplete="off"></label>
+      <label>Nachname <input name="last_name" maxlength="60" autocomplete="off"></label>
+      ${groups.length
+        ? html`<label>Instrument / Gruppe <select name="group_id"><option value="">– neu oder keine –</option>${options(groups.map((g) => ({ value: g.id, label: g.name })), '')}</select></label>
+            <label>oder neues Instrument <input name="new_group" maxlength="60" placeholder="z. B. Klavier"></label>`
+        : html`<label>Instrument <input name="new_group" maxlength="60" placeholder="z. B. Klavier"></label>`}
+      <button class="btn" type="submit">Anlegen</button>
+    </form></section>`;
+}
 
 function periodFromQuery(c: Ctx, ws: WsContext): Period {
   return parsePeriod({ month: c.req.query('month'), year: c.req.query('year') }, localDate(Date.now(), ws.timezone));
@@ -170,7 +186,7 @@ function studentTable(ws: WsContext, students: StudentRow[], totals: Map<string,
     </tr></thead>
     <tbody>${rows.map(
       ({ s, t }) => html`<tr class="${t.lessons ? '' : 'row-empty'}">
-        <td><a href="/w/${ws.id}/students/${s.user_id}?${p.query}"><strong>${studentName(s)}</strong></a>${s.role ? '' : html` <span class="badge badge-muted">extern</span>`}${s.group_names ? html`<br>${s.group_names.split(', ').map((g) => html`<span class="badge badge-group">${g}</span> `)}` : ''}</td>
+        <td><a href="/w/${ws.id}/students/${s.user_id}?${p.query}"><strong>${studentName(s)}</strong></a>${s.offline ? html` ${offlineBadge}` : s.role ? '' : html` <span class="badge badge-muted">extern</span>`}${s.group_names ? html`<br>${s.group_names.split(', ').map((g) => html`<span class="badge badge-group">${g}</span> `)}` : ''}</td>
         <td>${s.own_price_cents !== null ? html`<span class="num">${formatMoney(s.own_price_cents)}</span> <span class="badge badge-muted">individuell</span>` : html`<span class="muted">${defaultPrice}</span>`}</td>
         <td class="num">${t.lessons || '–'}${t.planned ? html` <span class="muted">(${t.planned} geplant)</span>` : ''}</td>
         <td class="num">${t.attended ? html`${t.attended} <span class="muted">· ${formatHours(t.attendedMinutes)}</span>` : '–'}</td>
@@ -252,7 +268,7 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
       pageHeader(
         'Schüler & Abrechnung',
         'Wer war wie oft da, was wurde berechnet, was ist bezahlt. Nach jedem Termin abhaken – Preise legst du unten fest.',
-        html`<a class="btn btn-secondary" href="/w/${ws.id}/members">Schüler:in einladen</a>`,
+        html`<a class="btn btn-secondary" href="#neu">Schüler:in ohne App</a> <a class="btn btn-secondary" href="/w/${ws.id}/members">Schüler:in einladen</a>`,
       ),
       unchecked
         ? html`<div class="flash flash-action" role="status">${unchecked === 1 ? 'Ein vergangener Termin ist' : `${unchecked} vergangene Termine sind`} noch nicht abgehakt. <a href="/w/${ws.id}/students/check">Jetzt abhaken</a></div>`
@@ -265,9 +281,10 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
         ${statCards(all)}
         ${students.length
           ? studentTable(ws, students, totals, p, priceLabel(ws))
-          : emptyState('Noch keine Schüler:innen', 'Hier erscheinen alle Mitglieder deines Arbeitsbereichs und alle, die bei dir einen festen Termin gebucht haben.', html`<a class="btn" href="/w/${ws.id}/members">Schüler:in einladen</a>`)}
+          : emptyState('Noch keine Schüler:innen', 'Hier erscheinen alle Mitglieder deines Arbeitsbereichs und alle, die bei dir einen festen Termin gebucht haben. Schüler:innen ohne App trägst du unten selbst ein.', html`<a class="btn" href="/w/${ws.id}/members">Schüler:in einladen</a>`)}
       </section>`,
       p.kind === 'year' ? html`<section class="card"><h2>Nach Monaten</h2>${monthTable(ws, p.key, lessons, `/w/${ws.id}/students`)}</section>` : '',
+      newStudentForm(ws, await listGroups(db, ws.id)),
       html`<section class="card" id="preise"><h2>Standardpreis</h2>
         <form method="post" action="/w/${ws.id}/students/settings" class="grid-form">
           <label>Preis (€) <input name="default_price" class="money" inputmode="decimal" maxlength="12" value="${moneyInput(ws.default_price_cents)}" placeholder="z. B. 30,00"></label>
@@ -276,6 +293,19 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
           <button class="btn" type="submit">Speichern</button>
         </form></section>`,
     ]);
+  });
+
+  app.post('/w/:wid/students/new', async (c) => {
+    const { ws } = await requireWs(c, 'billing.manage');
+    const { db } = c.get('deps');
+    const f = await readForm(c);
+    const firstName = str(f, 'first_name', 60);
+    const lastName = str(f, 'last_name', 60);
+    if (!firstName) return back(c, `/w/${ws.id}/students#neu`, 'name_required');
+    const wanted = str(f, 'group_id', 50);
+    const groupId = wanted && (await listGroups(db, ws.id)).some((g) => g.id === wanted) ? wanted : null;
+    const userId = await createOfflineStudent(db, ws.id, { firstName, lastName, groupId, newGroupName: groupId ? '' : str(f, 'new_group', 60) });
+    return c.redirect(`/w/${ws.id}/students/${userId}?msg=student_created#termin`, 303);
   });
 
   app.post('/w/:wid/students/settings', async (c) => {
@@ -373,7 +403,7 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
     return page(c, ws, studentName(s), [
       flash(c.req.query('msg'), c.req.query('n') ? `(${Number(c.req.query('n'))} eingetragen${Number(c.req.query('k')) ? `, ${Number(c.req.query('k'))} übersprungen – Zeit schon belegt` : ''})` : undefined),
       errorBox(c.req.query('err') === 'time' ? 'Ungültige Zeit: Bitte Datum, Uhrzeit und Dauer prüfen.' : null),
-      pageHeader(studentName(s), s.email, html`<a class="btn btn-secondary" href="/w/${ws.id}/students?${p.query}">Alle Schüler:innen</a>
+      pageHeader(studentName(s), s.offline ? 'Ohne App eingetragen – bekommt keine E-Mails' : s.email, html`<a class="btn btn-secondary" href="/w/${ws.id}/students?${p.query}">Alle Schüler:innen</a>
         <a class="btn btn-secondary" href="/w/${ws.id}/bookings?person=${s.user_id}&status=confirmed">Buchungen</a>`),
       html`<section class="card">
         ${periodNav(base, p, html`<a class="btn btn-secondary btn-small" href="/w/${ws.id}/students/export.csv?${p.query}&user=${s.user_id}" download>CSV</a>`)}
@@ -403,6 +433,16 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
           </form>
         </section>
       </div>`,
+      s.offline
+        ? html`<section class="card" id="konto"><h2>Name &amp; E-Mail</h2>
+            <form method="post" action="${base}/offline" class="grid-form">
+              <label>Vorname <input name="first_name" required maxlength="60" value="${s.first_name}"></label>
+              <label>Nachname <input name="last_name" maxlength="60" value="${s.last_name}"></label>
+              <label class="span-all">E-Mail (optional) <input type="email" name="email" maxlength="200" autocomplete="off"></label>
+              <p class="hint span-all">${studentName(s)} ist ohne App eingetragen und bekommt keine E-Mails. Trägst du eine E-Mail ein, bekommt ${studentName(s)} Terminbestätigungen und kann sich mit genau dieser Adresse registrieren – alle bisherigen Termine sind dann im eigenen Konto.</p>
+              <button class="btn btn-secondary" type="submit">Speichern</button>
+            </form></section>`
+        : '',
       html`<div class="two-col">
         <section class="card"><h2>Preis</h2>
           <form method="post" action="${base}/rate" class="stack">
@@ -411,7 +451,7 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
               <span class="hint">Leer lassen = Standardpreis (${priceLabel(ws)}). Gilt für noch nicht abgehakte Termine.</span></div>
             <button class="btn" type="submit">Preis speichern</button>
           </form></section>
-        <section class="card"><h2>Termin eintragen</h2>
+        <section class="card" id="termin"><h2>Termin eintragen</h2>
           ${offerings.length
             ? html`<form method="post" action="${base}/lessons" class="stack">
                 <div class="grid-form">
@@ -528,6 +568,23 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
       for (const gid of wanted) await addToGroup(db, ws.id, gid, s.membership_id!);
     });
     return back(c, `/w/${ws.id}/students/${s.user_id}`, 'saved');
+  });
+
+  app.post('/w/:wid/students/:uid/offline', async (c) => {
+    const { ws } = await requireWs(c, 'billing.manage');
+    const { db } = c.get('deps');
+    const s = await getStudent(db, ws.id, c.req.param('uid'));
+    if (!s || !s.offline || !s.membership_id) notFound();
+    const f = await readForm(c);
+    const base = `/w/${ws.id}/students/${s.user_id}`;
+    const firstName = str(f, 'first_name', 60);
+    const rawEmail = str(f, 'email', 254);
+    const email = rawEmail ? normalizeEmail(rawEmail) : '';
+    if (!firstName) return back(c, base, 'name_required');
+    if (email === null) return back(c, base, 'email_invalid');
+    const r = await updateOfflineStudent(db, s.user_id, { firstName, lastName: str(f, 'last_name', 60), email });
+    if (r === 'not_offline') notFound();
+    return back(c, base, r === 'email_taken' ? 'email_taken' : 'saved');
   });
 
   app.post('/w/:wid/students/:uid/contact', async (c) => {

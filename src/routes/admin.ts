@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import { html, raw } from 'hono/html';
 import { ASSIGNABLE_ROLES, can, ROLE_LABELS, VISIBILITY_LABELS, type Role, type Visibility } from '../authz.ts';
+import { isOfflineEmail, shownEmail } from '../offline.ts';
 import { bool, int, list, notFound, oneOf, readForm, requireWs, str, type AppEnv, type Ctx, type Form, type WsContext } from '../context.ts';
 import { normalizeEmail } from '../services/auth.ts';
 import {
@@ -264,7 +265,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
       html`<section class="card"><h2>Mitglieder</h2><div class="table-wrap"><table>
         <thead><tr><th>Name</th><th>E-Mail</th><th>Rolle</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
         ${members.map(
-          (m) => html`<tr><td>${m.display_name || '–'}</td><td>${m.email}</td>
+          (m) => html`<tr><td>${m.display_name || '–'}</td><td>${isOfflineEmail(m.email) ? html`<span class="badge badge-muted">ohne App</span>` : m.email}</td>
             <td>${m.role === 'owner'
               ? ROLE_LABELS.owner
               : html`<form method="post" action="/w/${ws.id}/members/${m.membership_id}/role" class="inline">
@@ -411,7 +412,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         <div class="field"><label for="description">Beschreibung</label><input id="description" name="description" maxlength="500" value="${group.description}"></div>
         <fieldset class="field"><legend>Mitglieder</legend>
           ${members.length
-            ? members.map((m) => html`<label class="check"><input type="checkbox" name="members" value="${m.membership_id}" ${checked(inGroup.has(m.membership_id))}> ${m.display_name || m.email} <span class="muted">${m.email}</span></label>`)
+            ? members.map((m) => html`<label class="check"><input type="checkbox" name="members" value="${m.membership_id}" ${checked(inGroup.has(m.membership_id))}> ${m.display_name || m.email} <span class="muted">${shownEmail(m.email)}</span></label>`)
             : html`<p class="muted">Noch keine Mitglieder – <a href="/w/${ws.id}/members">Personen einladen</a>.</p>`}
         </fieldset>
         <p class="hint">Neue Personen kannst du direkt in diese Gruppe einladen: unter „Mitglieder“ beim Einladen die Gruppe wählen.</p>
