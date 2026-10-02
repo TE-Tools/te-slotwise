@@ -41,6 +41,7 @@ const loc = (r: Response) => r.headers.get('location') ?? '';
 // --- Anbieter richtet ein ---
 const owner = new Client();
 await owner.login(`chef-${Date.now()}@example.test`, 'Chefin Test');
+check(/now_teacher/.test(loc(await owner.req('/profile/account-type', { type: 'teacher' }))), 'Auf Lehrkraft umgestellt');
 const ws = await owner.req('/workspaces', { name: 'Rauchtest', kind: 'personal', timezone: 'Europe/Berlin', description: 'Test' });
 const wsId = /\/w\/([^/]+)\//.exec(loc(ws))?.[1];
 check(wsId, 'Arbeitsbereich angelegt');

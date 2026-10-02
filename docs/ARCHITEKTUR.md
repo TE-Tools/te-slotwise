@@ -38,6 +38,7 @@ Mehrsprachigkeit, Kontaktimport, WhatsApp-Automatisierung.
 | Mitarbeiter:in (`staff`) | Slots und Buchungen verwalten, Kalender sehen, selbst buchen |
 | Mitglied | sehen und buchen, was für sie freigegeben ist |
 | Externe Person (ohne Mitgliedschaft) | öffentliche Slots buchen, eigene Buchungen verwalten |
+| Kontoart **Schüler:in** (Standard) / **Lehrkraft** (im Profil umstellbar) | Nur Lehrkräfte legen Arbeitsbereiche an und sehen „Neuer Arbeitsbereich“; zurück zu Schüler:in nur ohne eigenen Bereich. Innerhalb eines Bereichs gilt weiterhin die Rolle dort. |
 | Öffentliche Besucher | nur öffentliche Angebote und freie Zeiten sehen; zum Buchen anmelden |
 
 Routen prüfen immer ein **Recht** (`src/authz.ts`, `can(role, permission)`), nie direkt eine Rolle.
