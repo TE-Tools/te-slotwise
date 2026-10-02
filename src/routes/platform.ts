@@ -74,7 +74,7 @@ export function registerPlatformRoutes(app: Hono<AppEnv>) {
         </section>`,
         html`<section class="card"><h2>Betreiberangaben (Impressum)</h2>
           ${config.operator.name
-            ? html`<p>${config.operator.name} · ${config.operator.email}</p>`
+            ? html`<p>${config.operator.name.split('|').map((l) => l.trim()).join(' · ')}${config.operator.email ? ` · ${config.operator.email}` : ''}</p>`
             : html`<p class="flash flash-info">Noch nicht hinterlegt. Ohne Angaben ist das Impressum unvollständig.</p>`}
           <p><a href="/impressum">Impressum ansehen</a> · <a href="/datenschutz">Datenschutz ansehen</a></p>
         </section>`,

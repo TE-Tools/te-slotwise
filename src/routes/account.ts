@@ -191,7 +191,8 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
   const operatorBlock = (c: Ctx) => {
     const op = c.get('deps').config.operator;
     if (!op.name) return html`<p class="flash flash-info">Die Angaben zum Betreiber sind noch nicht hinterlegt (Einstellungen OPERATOR_NAME, OPERATOR_ADDRESS, OPERATOR_EMAIL).</p>`;
-    return html`<p>${op.name}<br>${op.address.split('|').map((l, i) => html`${i ? html`<br>` : ''}${l.trim()}`)}</p>
+    // Name und Anschrift dürfen mehrzeilig sein („|“ = Zeilenumbruch).
+    return html`<p>${op.name.split('|').map((l, i) => html`${i ? html`<br>` : ''}${l.trim()}`)}<br>${op.address.split('|').map((l, i) => html`${i ? html`<br>` : ''}${l.trim()}`)}</p>
       <p>${op.email ? html`E-Mail: <a href="mailto:${op.email}">${op.email}</a>` : ''}${op.phone ? html`<br>Telefon: ${op.phone}` : ''}</p>`;
   };
 
