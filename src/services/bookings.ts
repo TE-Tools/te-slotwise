@@ -244,7 +244,8 @@ export async function providerDecision(
 
 /**
  * Eine Seite schlägt eine andere Zeit vor.
- * - Anbieterseite: wird als Vorschlag gespeichert, die buchende Person muss zustimmen.
+ * - Anbieterseite: wird als Vorschlag gespeichert, die buchende Person muss zustimmen –
+ *   oder mit `direct` sofort verschoben (Termin ist damit fest, die buchende Person wird informiert).
  * - Buchende bei offener Anfrage: die Anfrage selbst wird geändert (wartet weiter auf die Anbieterseite).
  * - Buchende bei fixem Termin: Vorschlag, die Anbieterseite muss zustimmen; bis dahin gilt die alte Zeit.
  */
@@ -258,6 +259,7 @@ export async function proposeTime(
   endMs: number,
   note = '',
   now = Date.now(),
+  direct = false,
 ): Promise<ActionResult> {
   if (!(endMs > startMs) || endMs - startMs > 24 * 3600_000 || startMs <= now) return 'bad_time';
   try {
@@ -279,6 +281,17 @@ export async function proposeTime(
         );
         await logEvent(db, c, c.status, c.status, scope.userId, `Wunschzeit geändert: ${newWhen}`);
         await notifyProviders(db, appUrl, c, 'proposal_to_provider', scope.userId, { newWhen, note: note || undefined });
+        return 'ok';
+      }
+
+      if (by === 'provider' && direct) {
+        await db.run(
+          `UPDATE bookings SET status = 'confirmed', holds_seat = 1, starts_at = ?, ends_at = ?, proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL,
+             proposed_slot_id = NULL, proposal_note = '', updated_at = ? WHERE id = ?`,
+          [s, e, nowIso(now), c.id],
+        );
+        await logEvent(db, c, c.status, 'confirmed', scope.userId, `Verschoben: ${newWhen}`);
+        await notifyBooker(db, appUrl, c, 'booking_moved', { newWhen, note: note || undefined });
         return 'ok';
       }
 
@@ -489,6 +502,8 @@ export interface WsBookingRow extends BookingTimes {
   slot_kind: 'fixed' | 'window';
   booker_name: string;
   booker_email: string;
+  /** 1 = Schüler:in ohne App (keine E-Mails, kann nicht zustimmen) */
+  booker_offline: number;
   user_id: string;
   is_member: number;
   conflicts: number;
@@ -552,7 +567,7 @@ export async function listWorkspaceBookings(db: Db, wsId: string, f: BookingFilt
        (SELECT g.name FROM ws_groups g WHERE g.id = b.group_id) AS group_name,
        b.proposed_starts_at, b.proposed_ends_at, b.proposed_by, b.proposal_note, b.slot_id, b.offering_id,
        o.name AS offering_name, s.id AS slot_id, s.kind AS slot_kind,
-       u.display_name AS booker_name, CASE WHEN u.email LIKE '%@ohne-app.invalid' THEN '' ELSE u.email END AS booker_email, u.id AS user_id,
+       u.display_name AS booker_name, CASE WHEN u.email LIKE '%@ohne-app.invalid' THEN '' ELSE u.email END AS booker_email, (u.email LIKE '%@ohne-app.invalid') AS booker_offline, u.id AS user_id,
        EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = b.workspace_id AND m.user_id = b.user_id) AS is_member,
        (SELECT COUNT(*) FROM bookings x WHERE x.workspace_id = b.workspace_id AND x.id <> b.id AND x.status IN ('requested','confirmed')
           AND x.starts_at < b.ends_at AND x.ends_at > b.starts_at) AS conflicts

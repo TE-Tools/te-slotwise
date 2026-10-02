@@ -1219,11 +1219,12 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         ${active ? proposalNote(b, 'provider') : ''}
         ${active
           ? html`<div class="actions">
+              ${b.proposed_by === 'provider' ? act('apply-proposal', 'Vorschlag direkt übernehmen', '') : ''}
               ${b.proposed_by === 'booker' ? [act('proposal', 'Neue Zeit annehmen', '', undefined, html`<input type="hidden" name="accept" value="1">`), act('proposal', 'Vorschlag ablehnen', 'btn-secondary', undefined, html`<input type="hidden" name="accept" value="0">`)] : ''}
               ${b.status === 'requested' ? [act('confirm', 'Bestätigen', ''), act('decline', 'Ablehnen', 'btn-secondary', 'Anfrage ablehnen?')] : ''}
               ${act('cancel', 'Absagen', 'btn-danger', 'Termin wirklich absagen? Die Person wird informiert.')}
             </div>
-            ${timeChangeForm(`/w/${ws.id}/bookings/${b.id}/propose`, b, 'Verschieben / andere Zeit vorschlagen')}`
+            ${timeChangeForm(`/w/${ws.id}/bookings/${b.id}/propose`, b, 'Verschieben', { offline: !!b.booker_offline })}`
           : ''}
         <details><summary>Verlauf</summary><div data-history="/w/${ws.id}/bookings/${b.id}/history"><a href="/w/${ws.id}/bookings/${b.id}/history">Verlauf anzeigen</a></div></details>
       </li>`;
@@ -1325,9 +1326,23 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     if (!b) notFound();
     const f = await readForm(c);
     const t = parseTimeChange(f, b.timezone);
-    const r = t ? await proposeTime(db, config.appUrl, 'provider', { wsId: ws.id, userId: user.id }, b.id, t.start, t.end, str(f, 'note', 500)) : 'bad_time';
+    // Lehrkraft verschiebt standardmäßig direkt; Schüler:innen ohne App können ohnehin nicht zustimmen.
+    const direct = !!b.booker_offline || str(f, 'mode') !== 'propose';
+    const r = t ? await proposeTime(db, config.appUrl, 'provider', { wsId: ws.id, userId: user.id }, b.id, t.start, t.end, str(f, 'note', 500), Date.now(), direct) : 'bad_time';
     kick();
-    return back(c, returnPath(c, ws), r === 'ok' ? 'proposal_sent' : r === 'full' ? 'proposal_conflict' : decisionMsg[r]);
+    return back(c, returnPath(c, ws), r === 'ok' ? (direct ? 'booking_moved' : 'proposal_sent') : r === 'full' ? 'proposal_conflict' : decisionMsg[r]);
+  });
+
+  // Eigenen offenen Vorschlag direkt übernehmen (z. B. bei Schüler:innen ohne App).
+  app.post('/w/:wid/bookings/:bid/apply-proposal', async (c) => {
+    const { user, ws } = await requireWs(c, 'bookings.manage');
+    const { db, config, kick } = c.get('deps');
+    const b = await getWorkspaceBooking(db, ws.id, c.req.param('bid'));
+    if (!b) notFound();
+    if (b.proposed_by !== 'provider' || !b.proposed_starts_at || !b.proposed_ends_at) return back(c, returnPath(c, ws), 'invalid_state');
+    const r = await proposeTime(db, config.appUrl, 'provider', { wsId: ws.id, userId: user.id }, b.id, Date.parse(b.proposed_starts_at), Date.parse(b.proposed_ends_at), b.proposal_note, Date.now(), true);
+    kick();
+    return back(c, returnPath(c, ws), r === 'ok' ? 'booking_moved' : r === 'full' ? 'proposal_conflict' : decisionMsg[r]);
   });
 
   app.post('/w/:wid/bookings/:bid/proposal', async (c) => {

@@ -19,7 +19,8 @@ export type Template =
   | 'proposal_to_booker'
   | 'proposal_to_provider'
   | 'proposal_accepted'
-  | 'proposal_rejected';
+  | 'proposal_rejected'
+  | 'booking_moved';
 
 export interface Payload {
   workspaceName?: string;
@@ -50,6 +51,7 @@ export const TEMPLATE_LABELS: Record<Template, string> = {
   proposal_to_provider: 'Neue Zeit gewünscht (an Anbieter)',
   proposal_accepted: 'Zeitvorschlag angenommen',
   proposal_rejected: 'Zeitvorschlag abgelehnt',
+  booking_moved: 'Termin verschoben (an Buchende)',
 };
 
 const footer = '\n\n— TE-Slotwise\nDiese Nachricht wurde automatisch erstellt.';
@@ -143,6 +145,11 @@ export function render(template: Template, p: Payload, secretLink?: string): { s
       return {
         subject: `Zeit bestätigt: ${p.offeringName}`,
         text: `Hallo,\n\nder Zeitvorschlag in „${ws}“ wurde angenommen. Der Termin ist jetzt fest:\n\n${p.offeringName}\n${p.newWhen}${more}${footer}`,
+      };
+    case 'booking_moved':
+      return {
+        subject: `Termin verschoben: ${p.offeringName}`,
+        text: `Hallo,\n\n„${ws}“ hat deinen Termin verschoben. Die neue Zeit gilt ab sofort.\n\nBisher: ${p.when}\nNeu: ${p.newWhen}${p.note ? `\n\nHinweis: ${p.note}` : ''}${more}${footer}`,
       };
     case 'proposal_rejected':
       return {
