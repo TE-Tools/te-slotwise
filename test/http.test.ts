@@ -46,7 +46,7 @@ function client(app: ReturnType<typeof createApp>) {
 }
 
 /** Registriert ein Konto (Vorname, Nachname, E-Mail, Passwort) und bestätigt es über den Link aus der E-Mail. */
-async function login(app: ReturnType<typeof createApp>, mailer: MemoryMailer, email: string, name = 'Test Person', password = 'test-passwort-1') {
+async function login(app: ReturnType<typeof createApp>, mailer: MemoryMailer, email: string, name = 'Test Person', password = 'test-passwort-1', teacher = true) {
   const c = client(app);
   const [first, ...rest] = name.split(' ');
   const r1 = await c.req('/register', { method: 'POST', form: { first_name: first, last_name: rest.join(' ') || 'Person', email, password, password2: password } });
@@ -60,6 +60,8 @@ async function login(app: ReturnType<typeof createApp>, mailer: MemoryMailer, em
   assert.equal(r2.status, 303);
   // Token ist nur einmal gültig.
   assert.equal((await c.req(`/auth/verify?token=${token}`)).status, 400);
+  // Neue Konten sind Schüler:innen; die meisten Tests brauchen eine Lehrkraft (Arbeitsbereich anlegen).
+  if (teacher) await c.req('/profile/account-type', { method: 'POST', form: { type: 'teacher' } });
   return c;
 }
 
@@ -552,4 +554,27 @@ test('Meine Termine: Lehrkraft sieht ihre Unterrichtstermine (bestätigt und ang
   assert.equal((page.match(/Paula Pfeife<\/strong> · Flötenstunde/g) ?? []).length, 3);
   assert.match(page, /bestätigt/);
   assert.match(await (await owner.req('/dashboard')).text(), /Paula Pfeife/);
+});
+
+test('Kontoart: Neue Konten sind Schüler:innen, erst als Lehrkraft lassen sich Arbeitsbereiche anlegen', async () => {
+  const { app, mailer, db } = await setup();
+  const c = await login(app, mailer, 'neuling@example.com', 'Nele Neu', 'neu-passwort-1', false);
+  const dash = await (await c.req('/dashboard')).text();
+  assert.doesNotMatch(dash, /Neuer Arbeitsbereich/);
+  assert.match(dash, /Noch bei keiner Lehrkraft/);
+  assert.equal((await c.req('/workspaces/new')).status, 403);
+  const blocked = await c.req('/workspaces', { method: 'POST', form: { name: 'Heimlich', kind: 'personal', timezone: 'Europe/Berlin', description: '' } });
+  assert.equal(blocked.status, 403);
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM workspaces`))!.n, 0);
+  assert.match(await (await c.req('/profile')).text(), /Ich nutze TE-Slotwise als/);
+  // Auf Lehrkraft umstellen → direkt zum Anlegen.
+  const sw = await c.req('/profile/account-type', { method: 'POST', form: { type: 'teacher' } });
+  assert.match(sw.headers.get('location')!, /^\/workspaces\/new\?msg=now_teacher/);
+  assert.match(await (await c.req('/dashboard')).text(), /Neuer Arbeitsbereich/);
+  const ws = await c.req('/workspaces', { method: 'POST', form: { name: 'Mein Unterricht', kind: 'personal', timezone: 'Europe/Berlin', description: '' } });
+  assert.equal(ws.status, 303);
+  // Mit eigenem Arbeitsbereich geht es nicht zurück zu Schüler:in.
+  const back = await c.req('/profile/account-type', { method: 'POST', form: { type: 'student' } });
+  assert.match(back.headers.get('location')!, /still_owner/);
+  assert.equal((await db.get<{ account_type: string }>(`SELECT account_type FROM users WHERE email = 'neuling@example.com'`))!.account_type, 'teacher');
 });

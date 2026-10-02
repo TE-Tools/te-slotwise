@@ -11,7 +11,7 @@ Für Lehrkräfte gibt es unter **Schüler** eine Abrechnungsübersicht: Standard
 
 TE-Slotwise ist als **App installierbar** (Startbildschirm, wie der Familienplaner) und schickt auf Wunsch **Push-Benachrichtigungen** – einschalten unter Profil → „App & Push-Benachrichtigungen“. Auf dem iPhone zuerst über Safari → Teilen → „Zum Home-Bildschirm“ installieren (Push ab iOS 16.4). Die Push-Schlüssel (VAPID) erzeugt die App beim ersten Bedarf selbst; optional fest vorgeben mit `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` (Secrets) und `VAPID_SUBJECT`.
 
-**Konten:** Registrierung mit Vorname, Nachname, E-Mail und Passwort; die E-Mail-Adresse wird einmal per Link bestätigt. Danach Anmeldung nur mit E-Mail und Passwort. Wer früher per Link angemeldet war, legt über „Passwort vergessen?“ einmalig ein Passwort fest.
+**Konten:** Registrierung mit Vorname, Nachname, E-Mail und Passwort. Neue Konten sind **Schüler:innen** (buchen nur); wer unterrichtet, stellt im Profil auf **Lehrkraft** um und kann dann Arbeitsbereiche anlegen. die E-Mail-Adresse wird einmal per Link bestätigt. Danach Anmeldung nur mit E-Mail und Passwort. Wer früher per Link angemeldet war, legt über „Passwort vergessen?“ einmalig ein Passwort fest.
 
 **Kalender:** Profil → „Kalender verknüpfen“: persönlicher Abo-Link (webcal/https) für Google, Apple, Outlook usw., Download als .ics, „In Kalender übernehmen“ pro Termin. Für den **Familienplaner** gibt es dieselbe Schnittstelle wie bei Orchester-Orga (`POST /api/login`, `GET /api/me/termine`, siehe `src/routes/api.ts`).
 

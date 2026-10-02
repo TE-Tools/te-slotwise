@@ -28,6 +28,7 @@ async function user(email: string, name: string) {
 }
 
 const teacher = await user('lehrkraft@example.test', 'Demo Lehrkraft');
+await db.run(`UPDATE users SET account_type = 'teacher' WHERE id = ?`, [teacher]);
 const student = await user('schuelerin@example.test', 'Demo Schülerin');
 const visitor = await user('besucher@example.test', 'Demo Besucher');
 

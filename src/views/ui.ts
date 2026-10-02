@@ -65,6 +65,9 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   week_repeated: { text: 'Woche übernommen.', kind: 'ok' },
   week_empty: { text: 'In dieser Woche gibt es keine Slots zum Übernehmen.', kind: 'info' },
   week_too_many: { text: 'Das wären zu viele Slots auf einmal (höchstens 500). Bitte weniger Wochen wählen.', kind: 'error' },
+  now_teacher: { text: 'Du bist jetzt als Lehrkraft eingerichtet. Lege als Erstes deinen Arbeitsbereich an.', kind: 'ok' },
+  now_student: { text: 'Du nutzt TE-Slotwise jetzt als Schüler:in.', kind: 'ok' },
+  still_owner: { text: 'Du besitzt noch einen Arbeitsbereich. Übertrage oder lösche ihn zuerst (Einstellungen des Bereichs), dann kannst du auf Schüler:in umstellen.', kind: 'error' },
   money_invalid: { text: 'Ungültiger Betrag – bitte z. B. 25 oder 25,50 eingeben. Nichts wurde gespeichert.', kind: 'error' },
   lessons_saved: { text: 'Gespeichert.', kind: 'ok' },
   lesson_added: { text: 'Termin eingetragen.', kind: 'ok' },
@@ -148,7 +151,7 @@ export function layout(o: LayoutOpts): H {
               <summary>Arbeitsbereiche</summary>
               <ul>
                 ${o.workspaces.map((w) => html`<li><a href="/w/${w.id}">${w.name}</a></li>`)}
-                <li><a href="/workspaces/new">+ Neuer Arbeitsbereich</a></li>
+                ${o.user.account_type === 'teacher' ? html`<li><a href="/workspaces/new">+ Neuer Arbeitsbereich</a></li>` : ''}
               </ul>
             </details>`
           : ''}

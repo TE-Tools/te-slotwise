@@ -12,6 +12,8 @@ export interface User {
   email_verified_at: string | null;
   notify_booking_updates: number;
   notify_new_requests: number;
+  /** student = bucht nur; teacher = darf Arbeitsbereiche anlegen und sieht die Verwaltung */
+  account_type: AccountType;
   /** 0 = keine E-Mails, solange Push auf einem Gerät aktiv ist */
   notify_email: number;
   /** Gesetzt, wenn die Person ein Passwort festgelegt hat (nie an den Browser geben). */
@@ -20,6 +22,9 @@ export interface User {
   /** Die aktuelle Sitzung entstand vor Kurzem per E-Mail-Link (erlaubt „Passwort vergessen“). */
   recent_link_login?: boolean;
 }
+
+export type AccountType = 'student' | 'teacher';
+export const isTeacher = (u: { account_type?: string } | null | undefined) => u?.account_type === 'teacher';
 
 export const LOGIN_TOKEN_TTL_MS = 15 * 60_000;
 export const SESSION_TTL_MS = 30 * 24 * 3600_000;
@@ -185,6 +190,19 @@ export const fullName = (first: string, last: string) => `${first} ${last}`.trim
 
 export async function userByEmail(db: Db, email: string) {
   return await db.get<User>(`SELECT * FROM users WHERE email = ? AND deleted_at IS NULL`, [email]);
+}
+
+/**
+ * Kontoart umstellen. Zurück zu Schüler:in geht nur, wenn die Person keinen Arbeitsbereich mehr
+ * besitzt – sonst wären dessen Verwaltung und Buchungen plötzlich unsichtbar.
+ */
+export async function setAccountType(db: Db, userId: string, type: AccountType): Promise<'ok' | 'owns_workspaces'> {
+  if (type === 'student') {
+    const owns = (await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM memberships WHERE user_id = ? AND role = 'owner'`, [userId]))!.n;
+    if (owns) return 'owns_workspaces';
+  }
+  await db.run(`UPDATE users SET account_type = ? WHERE id = ?`, [type, userId]);
+  return 'ok';
 }
 
 // ---------- Zugänge für andere Apps (Familienplaner usw.) ----------

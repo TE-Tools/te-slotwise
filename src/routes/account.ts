@@ -1,10 +1,10 @@
 import type { Hono } from 'hono';
-import { html } from 'hono/html';
+import { html, raw } from 'hono/html';
 import { can, ROLE_LABELS, safeNextPath } from '../authz.ts';
 import { bool, notFound, readForm, requireUser, str, oneOf, type AppEnv, type Ctx, type Deps } from '../context.ts';
 import { getCookie } from 'hono/cookie';
 import { MIN_PASSWORD_LENGTH, passwordProblem, verifyPassword } from '../password.ts';
-import { deleteAccount, exportUserData, SESSION_COOKIE, setPassword, updateProfile } from '../services/auth.ts';
+import { deleteAccount, exportUserData, isTeacher, SESSION_COOKIE, setAccountType, setPassword, updateProfile } from '../services/auth.ts';
 import { awaiting, bookerAction, listMyBookings, proposeSlot, proposeTime, respondToProposal, type MyBookingRow } from '../services/bookings.ts';
 import { listVisibleSlots } from '../services/slots.ts';
 import {
@@ -87,6 +87,25 @@ async function alternativesFor(db: Deps['db'], userId: string, bookings: MyBooki
     );
   }
   return out;
+}
+
+/** Profilbereich: Kontoart (Schüler:in oder Lehrkraft). */
+async function roleSection(c: Ctx): Promise<H> {
+  const user = c.get('user')!;
+  const teacher = isTeacher(user);
+  return html`<section class="card narrow" id="rolle">
+    <h2>Ich nutze TE-Slotwise als …</h2>
+    <form method="post" action="/profile/account-type" class="stack">
+      <div class="segmented-radio">
+        <label><input type="radio" name="type" value="student" ${teacher ? '' : raw('checked')}> Schüler:in</label>
+        <label><input type="radio" name="type" value="teacher" ${teacher ? raw('checked') : ''}> Lehrkraft</label>
+      </div>
+      <p class="hint">${teacher
+        ? 'Als Lehrkraft legst du Arbeitsbereiche, Angebote und Slots an, verwaltest Buchungen und siehst Schüler und Abrechnung. Buchen kannst du weiterhin auch selbst.'
+        : 'Als Schüler:in buchst du Termine bei deinen Lehrkräften. Wenn du selbst unterrichtest, stelle auf „Lehrkraft“ um – dann kannst du eigene Termine anbieten.'}</p>
+      <button class="btn btn-secondary" type="submit">Übernehmen</button>
+    </form>
+  </section>`;
 }
 
 /** Profilbereich: App installieren und Push-Benachrichtigungen auf diesem Gerät. Die Knöpfe steuert app.js. */
@@ -231,13 +250,13 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
       title: 'Übersicht',
       body: [
         flash(c.req.query('msg')),
-        pageHeader(`Hallo ${user.display_name}`, undefined, html`<a class="btn" href="/workspaces/new">Neuer Arbeitsbereich</a>`),
+        pageHeader(`Hallo ${user.display_name}`, undefined, isTeacher(user) ? html`<a class="btn" href="/workspaces/new">Neuer Arbeitsbereich</a>` : undefined),
         needsMe.length
           ? html`<div class="flash flash-action" role="status">${needsMe.length === 1 ? 'Ein Termin wartet' : `${needsMe.length} Termine warten`} auf deine Zustimmung. <a href="/bookings">Ansehen</a></div>`
           : '',
         pushDevices
           ? ''
-          : html`<div class="flash flash-info push-hint">Tipp: Installiere TE-Slotwise als App und schalte Push ein – dann erfährst du sofort, wenn ein Termin bestätigt wird oder jemand einen Termin möchte. <a href="/profile#app">Jetzt einrichten</a></div>`,
+          : html`<div class="flash flash-info push-hint">Tipp: Installiere TE-Slotwise als App und schalte Push ein – dann erfährst du sofort, wenn ein Termin bestätigt${isTeacher(user) ? ' wird oder jemand einen Termin möchte' : ', verschoben oder abgesagt wird'}. <a href="/profile#app">Jetzt einrichten</a></div>`,
         invitations.length
           ? html`<section class="card"><h2>Offene Einladungen</h2><ul class="list">
               ${invitations.map(
@@ -246,12 +265,14 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
               )}
             </ul></section>`
           : '',
-        html`<section class="card"><h2>Deine Arbeitsbereiche</h2>
+        html`<section class="card"><h2>${isTeacher(user) ? 'Deine Arbeitsbereiche' : 'Deine Lehrkräfte'}</h2>
           ${workspaces.length
             ? html`<ul class="list">${workspaces.map(
                 (w) => html`<li class="row"><a href="/w/${w.id}"><strong>${w.name}</strong></a><span class="badge badge-muted">${ROLE_LABELS[w.role]}</span></li>`,
               )}</ul>`
-            : emptyState('Noch kein Arbeitsbereich', 'Lege einen eigenen Bereich an, um Termine anzubieten – oder nimm eine Einladung an, um bei anderen zu buchen.', html`<a class="btn" href="/workspaces/new">Arbeitsbereich anlegen</a>`)}
+            : isTeacher(user)
+              ? emptyState('Noch kein Arbeitsbereich', 'Lege einen eigenen Bereich an, um Termine anzubieten – oder nimm eine Einladung an, um bei anderen zu buchen.', html`<a class="btn" href="/workspaces/new">Arbeitsbereich anlegen</a>`)
+              : emptyState('Noch bei keiner Lehrkraft', 'Deine Lehrkraft schickt dir eine Einladung oder einen Link zur Buchungsseite. Danach siehst du hier ihre Termine. Du unterrichtest selbst? Stelle im Profil auf „Lehrkraft“ um.', html`<a class="btn btn-secondary" href="/profile#rolle">Zum Profil</a>`)}
         </section>`,
         html`<section class="card"><h2>Nächste Termine</h2>
           ${next.length
@@ -283,13 +304,28 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     </form>
   </section>`;
 
+  /** Arbeitsbereiche anlegen dürfen nur Lehrkräfte; Schüler:innen bekommen den Weg dorthin erklärt. */
+  const teachersOnly = (c: Ctx) =>
+    render(
+      c,
+      {
+        title: 'Nur für Lehrkräfte',
+        body: html`<section class="card narrow"><h1>Nur für Lehrkräfte</h1>
+          <p>Du bist als <strong>Schüler:in</strong> angemeldet. Arbeitsbereiche, Angebote und Slots legen Lehrkräfte an.</p>
+          <p>Du unterrichtest selbst? Dann stelle im Profil auf „Lehrkraft“ um.</p>
+          <p><a class="btn" href="/profile#rolle">Zum Profil</a></p></section>`,
+      },
+      403,
+    );
+
   app.get('/workspaces/new', async (c) => {
-    requireUser(c);
-    return render(c, { title: 'Neuer Arbeitsbereich', body: wsForm() });
+    if (!isTeacher(requireUser(c))) return teachersOnly(c);
+    return render(c, { title: 'Neuer Arbeitsbereich', body: [flash(c.req.query('msg')), wsForm()] });
   });
 
   app.post('/workspaces', async (c) => {
     const user = requireUser(c);
+    if (!isTeacher(user)) return teachersOnly(c);
     const f = await readForm(c);
     const v = { name: str(f, 'name', 120), kind: oneOf(str(f, 'kind'), ['personal', 'organization'] as const, 'personal'), timezone: str(f, 'timezone', 64), description: str(f, 'description', 2000) };
     if (!v.name) return render(c, { title: 'Neuer Arbeitsbereich', body: wsForm('Bitte einen Namen eingeben.', v) }, 400);
@@ -329,7 +365,11 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
             <div class="field"><span class="label">E-Mail-Adresse</span><span>${user.email} ${user.email_verified_at ? html`<span class="badge badge-confirmed">bestätigt</span>` : ''}</span></div>
             <fieldset class="field"><legend>E-Mail-Benachrichtigungen</legend>
               <label class="check"><input type="checkbox" name="notify_booking_updates" value="1" ${user.notify_booking_updates ? 'checked' : ''}> Zu meinen eigenen Buchungen (Bestätigung, Absage, Zeitvorschläge)</label>
-              <label class="check"><input type="checkbox" name="notify_new_requests" value="1" ${user.notify_new_requests ? 'checked' : ''}> Als Anbieter: neue Anfragen und Änderungswünsche</label>
+              ${isTeacher(user)
+                ? html`<label class="check"><input type="checkbox" name="notify_new_requests" value="1" ${user.notify_new_requests ? 'checked' : ''}> Als Lehrkraft: neue Anfragen und Änderungswünsche</label>`
+                : user.notify_new_requests
+                  ? html`<input type="hidden" name="notify_new_requests" value="1">`
+                  : ''}
               <label class="check"><input type="checkbox" name="notify_email" value="1" ${user.notify_email ? 'checked' : ''}> Per E-Mail (aus = nur Push, solange Push auf einem Gerät eingeschaltet ist)</label>
             </fieldset>
             ${setup && !user.password_hash
@@ -342,6 +382,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
             <button class="btn" type="submit">Speichern</button>
           </form>
         </section>`,
+        setup ? '' : await roleSection(c),
         setup ? '' : await appSection(c),
         setup ? '' : await calendarSection(c),
         setup
@@ -399,6 +440,16 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     });
     const next = safeNextPath(str(f, 'next'));
     return next ? c.redirect(next, 303) : back(c, '/profile', 'saved');
+  });
+
+  app.post('/profile/account-type', async (c) => {
+    const user = requireUser(c);
+    const f = await readForm(c);
+    const type = str(f, 'type') === 'teacher' ? 'teacher' : 'student';
+    if (type === (isTeacher(user) ? 'teacher' : 'student')) return back(c, '/profile', 'saved');
+    const r = await setAccountType(c.get('deps').db, user.id, type);
+    if (r === 'owns_workspaces') return back(c, '/profile', 'still_owner');
+    return type === 'teacher' ? back(c, '/workspaces/new', 'now_teacher') : back(c, '/dashboard', 'now_student');
   });
 
   app.post('/profile/password', async (c) => {
