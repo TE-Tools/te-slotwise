@@ -326,4 +326,18 @@
     };
     form.addEventListener('change', update);
   });
+
+  // Handy-Menü unten: aktuelle Seite markieren und sichtbar scrollen.
+  var bottom = document.querySelector('.bottomnav');
+  if (bottom) {
+    bottom.querySelectorAll('a').forEach(function (a) {
+      var path = a.getAttribute('href');
+      if (location.pathname === path) a.setAttribute('aria-current', 'page');
+    });
+  }
+  var current = document.querySelector('.subnav a[aria-current="page"]');
+  if (current && window.matchMedia('(max-width: 820px)').matches) {
+    var list = current.closest('ul');
+    if (list) list.scrollLeft = current.offsetLeft - (list.clientWidth - current.offsetWidth) / 2;
+  }
 })();
