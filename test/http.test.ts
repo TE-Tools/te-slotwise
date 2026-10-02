@@ -722,6 +722,10 @@ test('Schüler:in ohne App: nur Name und Instrument, feste Stunden sofort bestä
   assert.doesNotMatch(await (await owner.req(`/w/${wsId}/bookings`)).text(), /ohne-app\.invalid/);
   assert.doesNotMatch(await (await owner.req(`/w/${wsId}/members`)).text(), /ohne-app\.invalid/);
   assert.match(await (await owner.req('/calendar.ics')).text(), /SUMMARY:Paul Pfeife · Orgelstunde – Orgel/);
+  for (const path of ['/dashboard', `/w/${wsId}`, `/w/${wsId}/calendar`, '/bookings', `/w/${wsId}/calendar?view=month`, `/w/${wsId}/students/check`, `/w/${wsId}/groups`]) {
+    const res = await owner.req(path);
+    assert.equal(res.status, 200, path);
+  }
   assert.match(await (await owner.req(`/w/${wsId}/students/list.csv`)).text(), /Paul Pfeife;;Orgel/);
 
   // Platzhalter-Adressen lassen sich weder registrieren noch anmelden.
