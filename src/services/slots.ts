@@ -401,6 +401,53 @@ export async function updateSlots(db: Db, wsId: string, slotId: string, change: 
   });
 }
 
+export interface DeleteResult {
+  deleted: number;
+  blocked: { startsAt: string; timezone: string; reason: string }[];
+}
+
+/**
+ * Löscht Slots. Gesperrt nur, wenn es aktive Buchungen (angefragt/bestätigt) gibt oder eine Stunde
+ * schon abgehakt bzw. (teil)bezahlt ist – die Abrechnung bleibt so vollständig. Alte, abgesagte oder
+ * abgelehnte Anfragen verschwinden mit dem Slot. Offene Vorschläge, auf diesen Slot zu wechseln, werden verworfen.
+ */
+export async function deleteSlots(db: Db, wsId: string, slotIds: string[]): Promise<DeleteResult> {
+  return await db.tx(async () => {
+    const result: DeleteResult = { deleted: 0, blocked: [] };
+    for (const id of new Set(slotIds)) {
+      const slot = await db.get<{ id: string; starts_at: string; timezone: string }>(`SELECT id, starts_at, timezone FROM slots WHERE id = ? AND workspace_id = ?`, [id, wsId]);
+      if (!slot) continue;
+      const b = (await db.get<{ active: number; billed: number }>(
+        `SELECT SUM(status IN ('requested','confirmed')) AS active, SUM(attendance IS NOT NULL OR paid_cents > 0) AS billed FROM bookings WHERE slot_id = ? AND workspace_id = ?`,
+        [id, wsId],
+      ))!;
+      if (b.active) {
+        result.blocked.push({ startsAt: slot.starts_at, timezone: slot.timezone, reason: 'hat eine aktive Buchung – bitte zuerst absagen oder verschieben' });
+        continue;
+      }
+      if (b.billed) {
+        result.blocked.push({ startsAt: slot.starts_at, timezone: slot.timezone, reason: 'Stunde ist abgehakt oder bezahlt – bleibt für die Abrechnung erhalten' });
+        continue;
+      }
+      await db.run(
+        `UPDATE bookings SET proposed_slot_id = NULL, proposed_starts_at = NULL, proposed_ends_at = NULL, proposed_by = NULL, proposal_note = '', updated_at = ?
+         WHERE proposed_slot_id = ? AND workspace_id = ?`,
+        [nowIso(), id, wsId],
+      );
+      result.deleted += await db.run(`DELETE FROM slots WHERE id = ? AND workspace_id = ?`, [id, wsId]);
+    }
+    return result;
+  });
+}
+
+/** IDs dieses Slots und aller folgenden derselben Serie. */
+export async function seriesFromIds(db: Db, wsId: string, slotId: string) {
+  const slot = await db.get<{ series_id: string | null; starts_at: string }>(`SELECT series_id, starts_at FROM slots WHERE id = ? AND workspace_id = ?`, [slotId, wsId]);
+  if (!slot) return [];
+  if (!slot.series_id) return [slotId];
+  return (await db.all<{ id: string }>(`SELECT id FROM slots WHERE workspace_id = ? AND series_id = ? AND starts_at >= ? ORDER BY starts_at`, [wsId, slot.series_id, slot.starts_at])).map((r) => r.id);
+}
+
 export type BulkAction = 'publish' | 'unpublish' | 'close' | 'delete' | 'reluctant' | 'normal';
 
 /** Sammelaktion. Slots mit Buchungen werden nie gelöscht und nicht in den Entwurf zurückgesetzt. */
@@ -409,7 +456,6 @@ export async function bulkSlots(db: Db, wsId: string, slotIds: string[], action:
     let done = 0;
     let skipped = 0;
     for (const id of new Set(slotIds)) {
-      const hasBookings = await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM bookings WHERE slot_id = ? AND workspace_id = ?`, [id, wsId]);
       const active = await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM bookings WHERE slot_id = ? AND workspace_id = ? AND status IN ('requested','confirmed')`, [id, wsId]);
       let changed = 0;
       if (action === 'publish') changed = await db.run(`UPDATE slots SET status = 'published', updated_at = ? WHERE id = ? AND workspace_id = ?`, [nowIso(), id, wsId]);
@@ -419,7 +465,7 @@ export async function bulkSlots(db: Db, wsId: string, slotIds: string[], action:
       else if (action === 'unpublish') {
         if (!active?.n) changed = await db.run(`UPDATE slots SET status = 'draft', updated_at = ? WHERE id = ? AND workspace_id = ?`, [nowIso(), id, wsId]);
       } else if (action === 'delete') {
-        if (!hasBookings?.n) changed = await db.run(`DELETE FROM slots WHERE id = ? AND workspace_id = ?`, [id, wsId]);
+        changed = (await deleteSlots(db, wsId, [id])).deleted;
       }
       if (changed) done++;
       else skipped++;

@@ -578,3 +578,31 @@ test('Kontoart: Neue Konten sind Schüler:innen, erst als Lehrkraft lassen sich 
   assert.match(back.headers.get('location')!, /still_owner/);
   assert.equal((await db.get<{ account_type: string }>(`SELECT account_type FROM users WHERE email = 'neuling@example.com'`))!.account_type, 'teacher');
 });
+
+test('Slot bearbeiten mit Von–Bis, löschen einzeln, als Serie und über die Liste', async () => {
+  const { app, mailer, db } = await setup();
+  const owner = await login(app, mailer, 'loesch@example.com', 'Lotte Lösch');
+  const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Harfe', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
+  const offId = /offerings\/([^?]+)/.exec((await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Harfenstunde', duration_min: '45', confirmation_mode: 'manual', visibility: 'internal' } })).headers.get('location')!)![1];
+  await owner.req(`/w/${wsId}/slots/series`, { method: 'POST', form: { offering_id: offId, kind: 'fixed', from: futureDate(3), window_start: '16:00', window_end: '16:45', repeat: 'weekly', weeks: '5' } });
+  const ids = (await db.all<{ id: string }>(`SELECT id FROM slots WHERE workspace_id = ? ORDER BY starts_at`, [wsId])).map((r) => r.id);
+  assert.equal(ids.length, 5);
+  const edit = await (await owner.req(`/w/${wsId}/slots/${ids[0]}`)).text();
+  assert.match(edit, /name="end_time" required step="300" value="16:45"/);
+  assert.match(edit, /Diesen Slot löschen/);
+  assert.match(edit, /alle folgenden der Serie löschen \(5\)/);
+  // Fester Termin → Zeitfenster 16:00–19:00 über Von–Bis.
+  await owner.req(`/w/${wsId}/slots/${ids[0]}`, { method: 'POST', form: { kind: 'window', date: futureDate(3), time: '16:00', end_time: '19:00', capacity: '1', status: 'published', visibility: 'inherit', preference: 'normal', buffer_min: '0' } });
+  const s0 = (await db.get<{ kind: string; starts_at: string; ends_at: string }>(`SELECT kind, starts_at, ends_at FROM slots WHERE id = ?`, [ids[0]]))!;
+  assert.equal(s0.kind, 'window');
+  assert.equal((Date.parse(s0.ends_at) - Date.parse(s0.starts_at)) / 60000, 180);
+  // Einzeln löschen.
+  const del = await owner.req(`/w/${wsId}/slots/${ids[0]}/delete`, { method: 'POST', form: { scope: 'one' } });
+  assert.match(del.headers.get('location')!, /msg=slots_deleted&n=1&k=0/);
+  // Über die Liste mit dem Knopf „Ausgewählte löschen“ (Auswahlfeld steht auf „Veröffentlichen“).
+  await owner.req(`/w/${wsId}/slots/bulk`, { method: 'POST', form: { action: 'publish', delete: '1', ids: ids[1] } });
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM slots WHERE id = ?`, [ids[1]]))!.n, 0);
+  // Rest der Serie ab Slot 3.
+  await owner.req(`/w/${wsId}/slots/${ids[2]}/delete`, { method: 'POST', form: { scope: 'following' } });
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM slots WHERE workspace_id = ?`, [wsId]))!.n, 0);
+});
