@@ -25,13 +25,15 @@ async function setup() {
 /** Kleiner Browser-Ersatz mit Cookie-Speicher. */
 function client(app: ReturnType<typeof createApp>) {
   let cookie = '';
-  const req = async (path: string, init: { method?: string; form?: Record<string, string>; origin?: string | null } = {}) => {
+  const req = async (path: string, init: { method?: string; form?: Record<string, string | string[]>; origin?: string | null } = {}) => {
     const headers: Record<string, string> = {};
     if (cookie) headers.cookie = cookie;
     let body: string | undefined;
     if (init.form) {
       headers['content-type'] = 'application/x-www-form-urlencoded';
-      body = new URLSearchParams(init.form).toString();
+      const p = new URLSearchParams();
+      for (const [k, v] of Object.entries(init.form)) for (const x of Array.isArray(v) ? v : [v]) p.append(k, x);
+      body = p.toString();
     }
     if (init.origin !== null && (init.method ?? 'GET') !== 'GET') headers.origin = init.origin ?? ORIGIN;
     const res = await app.request(`${ORIGIN}${path}`, { method: init.method ?? 'GET', headers, body });
@@ -382,7 +384,7 @@ test('Schülerübersicht: nur für Verwaltende, Abhaken, Preise, Zahlungen und C
   assert.match(overview, /60,00\s*€/); // berechnet
   assert.match(overview, /individuell/);
   const csv = await (await owner.req(`/w/${wsId}/students/export.csv?month=2026-01`)).text();
-  assert.match(csv, /2026-01-05;15:00;15:45;45;Kind Muster;kind@example.com;Stunde;fest;Stattgefunden;30,00;30,00;30,00/);
+  assert.match(csv, /2026-01-05;15:00;15:45;45;Kind Muster;kind@example.com;Stunde;;fest;Stattgefunden;30,00;30,00;30,00/);
   // Fremde Rücksprungziele werden ignoriert.
   const evil = await owner.req(`/w/${wsId}/lessons`, { method: 'POST', form: { back: 'https://evil.example/', ids: ids[1], [`att_${ids[1]}`]: 'attended', [`price_${ids[1]}`]: '30', [`paid_${ids[1]}`]: '' } });
   assert.match(evil.headers.get('location')!, new RegExp(`^/w/${wsId}/students\\?msg=`));
@@ -605,4 +607,55 @@ test('Slot bearbeiten mit Von–Bis, löschen einzeln, als Serie und über die L
   // Rest der Serie ab Slot 3.
   await owner.req(`/w/${wsId}/slots/${ids[2]}/delete`, { method: 'POST', form: { scope: 'following' } });
   assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM slots WHERE workspace_id = ?`, [wsId]))!.n, 0);
+});
+
+test('Gruppen als Instrumente: Wahl beim Buchen, Pflege auf der Schülerseite, Anschrift und Geburtstag', async () => {
+  const { app, mailer, db } = await setup();
+  const owner = await login(app, mailer, 'musik@example.com', 'Mia Musik');
+  const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Musikschule', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
+  const offId = /offerings\/([^?]+)/.exec((await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Einzelstunde', duration_min: '45', confirmation_mode: 'auto', visibility: 'internal' } })).headers.get('location')!)![1];
+  const gid = async (name: string) => /groups\/([^?]+)/.exec((await owner.req(`/w/${wsId}/groups`, { method: 'POST', form: { name } })).headers.get('location')!)![1];
+  const klavier = await gid('Klavier');
+  const gitarre = await gid('Gitarre');
+  await gid('Geige');
+  const kid = await login(app, mailer, 'tom@example.com', 'Tom Ton', 'tom-passwort-1', false);
+  const kidId = (await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'tom@example.com'`))!.id;
+  await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES ('m-tom', ?, ?, 'member', ?)`, [wsId, kidId, new Date().toISOString()]);
+
+  // Lehrkraft ordnet Tom Klavier und Gitarre zu.
+  const page = await (await owner.req(`/w/${wsId}/students/${kidId}`)).text();
+  assert.match(page, /Gruppen speichern/);
+  await owner.req(`/w/${wsId}/students/${kidId}/groups`, { method: 'POST', form: { groups: [klavier, gitarre] } });
+  const groups = (await db.all<{ name: string }>(`SELECT g.name FROM group_members gm JOIN ws_groups g ON g.id = gm.group_id WHERE gm.membership_id = 'm-tom' ORDER BY g.name`)).map((g) => g.name);
+  assert.deepEqual(groups, ['Gitarre', 'Klavier']);
+
+  // Anschrift und Geburtstag: Lehrkraft pflegt, Tom sieht und ändert dieselben Daten.
+  await owner.req(`/w/${wsId}/students/${kidId}/contact`, { method: 'POST', form: { street: 'Hauptstr. 1', zip: '41460', city: 'Neuss', birth_date: '2014-05-03', phone: '0123', billing_name: 'Tina Ton' } });
+  assert.match(await (await kid.req('/profile')).text(), /value="Hauptstr. 1"/);
+  await kid.req('/profile/contact', { method: 'POST', form: { street: 'Nebenweg 2', zip: '41460', city: 'Neuss', birth_date: '2014-05-03', phone: '', billing_name: 'Tina Ton' } });
+  assert.match(await (await owner.req(`/w/${wsId}/students/${kidId}`)).text(), /value="Nebenweg 2"/);
+  assert.match((await kid.req('/profile/contact', { method: 'POST', form: { birth_date: '2999-01-01' } })).headers.get('location')!, /bad_birth_date/);
+  const list = await (await owner.req(`/w/${wsId}/students/list.csv`)).text();
+  assert.match(list, /Tom Ton;tom@example.com;Gitarre, Klavier;Nebenweg 2;41460;Neuss;2014-05-03;;Tina Ton/);
+
+  // Beim Buchen fragt die App, wofür – und speichert die Wahl.
+  const slotId = await (async () => {
+    await owner.req(`/w/${wsId}/slots/series`, { method: 'POST', form: { offering_id: offId, kind: 'fixed', from: futureDate(4), window_start: '15:00', window_end: '15:45', repeat: 'once' } });
+    return (await db.get<{ id: string }>(`SELECT id FROM slots WHERE workspace_id = ?`, [wsId]))!.id;
+  })();
+  const bookPage = await (await kid.req(`/w/${wsId}/slots/${slotId}/book`)).text();
+  assert.match(bookPage, /Wofür\? \(z\. B\. Instrument\)/);
+  assert.match(bookPage, /<option value="[^"]+">Gitarre<\/option>/);
+  assert.doesNotMatch(bookPage, />Geige</);
+  await kid.req(`/w/${wsId}/slots/${slotId}/book`, { method: 'POST', form: { group_id: gitarre } });
+  assert.equal((await db.get<{ group_id: string }>(`SELECT group_id FROM bookings WHERE user_id = ?`, [kidId]))!.group_id, gitarre);
+  // Lehrkraft sieht die Gruppe in Buchungen, Meine Termine und im Kalender-Abo.
+  assert.match(await (await owner.req(`/w/${wsId}/bookings`)).text(), /badge-group">Gitarre/);
+  assert.match(await (await owner.req('/bookings')).text(), /badge-group">Gitarre/);
+  assert.match(await (await owner.req('/calendar.ics')).text(), /SUMMARY:Tom Ton · Einzelstunde – Gitarre/);
+  // Fremde Gruppe wird nicht übernommen: Nur eine Gruppe → automatisch diese.
+  await owner.req(`/w/${wsId}/students/${kidId}/groups`, { method: 'POST', form: { groups: klavier } });
+  await owner.req(`/w/${wsId}/students/${kidId}/lessons`, { method: 'POST', form: { offering_id: offId, date: futureDate(6), time: '15:00', duration: '', repeat: 'once', group_id: gitarre } });
+  const last = (await db.get<{ group_id: string }>(`SELECT group_id FROM bookings WHERE user_id = ? ORDER BY starts_at DESC LIMIT 1`, [kidId]))!;
+  assert.equal(last.group_id, klavier);
 });

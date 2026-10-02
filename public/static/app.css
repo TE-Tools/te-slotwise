@@ -478,6 +478,7 @@ fieldset {
 input[type='text'],
 input[type='email'],
 input[type='password'],
+input[type='tel'],
 input[type='date'],
 input[type='time'],
 input[type='number'],
@@ -1411,4 +1412,9 @@ input.money {
 .teaching-day .row a {
   color: var(--text);
   text-decoration: none;
+}
+.badge-group {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-color: var(--accent);
 }

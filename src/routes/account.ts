@@ -4,7 +4,8 @@ import { can, ROLE_LABELS, safeNextPath } from '../authz.ts';
 import { bool, notFound, readForm, requireUser, str, oneOf, type AppEnv, type Ctx, type Deps } from '../context.ts';
 import { getCookie } from 'hono/cookie';
 import { MIN_PASSWORD_LENGTH, passwordProblem, verifyPassword } from '../password.ts';
-import { deleteAccount, exportUserData, isTeacher, SESSION_COOKIE, setAccountType, setPassword, updateProfile } from '../services/auth.ts';
+import { deleteAccount, exportUserData, isTeacher, readContact, SESSION_COOKIE, setAccountType, setPassword, updateContact, updateProfile } from '../services/auth.ts';
+import { contactFields } from '../views/contact.ts';
 import { awaiting, bookerAction, listMyBookings, proposeSlot, proposeTime, respondToProposal, type MyBookingRow } from '../services/bookings.ts';
 import { listVisibleSlots } from '../services/slots.ts';
 import {
@@ -31,7 +32,7 @@ function bookingCard(b: MyBookingRow, now: number, alternatives: Alternative[] =
   const canSelfCancel = b.allow_self_cancel && Date.parse(b.starts_at) - b.cancel_cutoff_hours * 3600_000 > now;
   return html`<li class="card booking">
     <div class="booking-head">
-      <div><strong>${b.offering_name}</strong> <span class="muted">· ${b.workspace_name}</span></div>
+      <div><strong>${b.offering_name}</strong>${b.group_name ? html` <span class="badge badge-group">${b.group_name}</span>` : ''} <span class="muted">· ${b.workspace_name}</span></div>
       <div>${bookingBadge(b.status, past)} ${active ? awaitingLabel(b, 'booker') : ''}</div>
     </div>
     <p>${when(b.starts_at, b.ends_at, b.timezone, { long: true })}</p>
@@ -159,7 +160,7 @@ function teachingList(entries: CalendarEntry[], showWorkspace: boolean): H {
         return html`<li class="row">
           <a href="/w/${e.workspace_id}/bookings?from=${day}&to=${day}#b-${e.id}">
             <strong class="num">${formatTime(Date.parse(e.starts_at), e.timezone)}–${formatTime(Date.parse(e.ends_at), e.timezone)}</strong>
-            · <strong>${e.booker_name || 'Ohne Namen'}</strong> · ${e.offering_name}${showWorkspace ? html` <span class="muted">(${e.workspace_name})</span>` : ''}
+            · <strong>${e.booker_name || 'Ohne Namen'}</strong> · ${e.offering_name}${e.group_name ? html` <span class="badge badge-group">${e.group_name}</span>` : ''}${showWorkspace ? html` <span class="muted">(${e.workspace_name})</span>` : ''}
           </a>
           ${e.status === 'requested' ? html`<span class="badge badge-requested">angefragt – bitte bestätigen</span>` : html`<span class="badge badge-confirmed">bestätigt</span>`}
         </li>`;
@@ -210,7 +211,7 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
         <h2>Verantwortlich</h2>
         ${operatorBlock(c)}
         <h2>Welche Daten wir verarbeiten</h2>
-        <p>TE-Slotwise speichert nur, was für Terminbuchungen nötig ist: E-Mail-Adresse, Vor- und Nachname, Mitgliedschaften und Gruppenzugehörigkeiten, Buchungen samt Verlauf und Nachrichten, bei Unterrichtsangeboten Anwesenheit, Preise und Zahlungen pro Termin, sowie den Versandstatus von E-Mail-Benachrichtigungen. Die Anmeldung erfolgt mit E-Mail und Passwort; zur Bestätigung der E-Mail-Adresse und bei „Passwort vergessen“ schicken wir einmalige Links. Passwörter werden nur als gesalzener, nicht umkehrbarer Hash (PBKDF2) gespeichert, nie im Klartext. Wenn du deinen Kalender verknüpfst, liefern wir deine Termine über einen geheimen Link bzw. an die App, die du verbindest (z. B. Familienplaner). Es gibt keine Werbe- oder Analyse-Cookies und keine Inhalte von Drittanbietern. Ein technisch notwendiges Cookie hält die Anmeldung aufrecht.</p>
+        <p>TE-Slotwise speichert nur, was für Terminbuchungen nötig ist: E-Mail-Adresse, Vor- und Nachname, freiwillig Anschrift, Geburtstag, Telefon und Rechnungsempfänger, Mitgliedschaften und Gruppenzugehörigkeiten, Buchungen samt Verlauf und Nachrichten, bei Unterrichtsangeboten Anwesenheit, Preise und Zahlungen pro Termin, sowie den Versandstatus von E-Mail-Benachrichtigungen. Die Anmeldung erfolgt mit E-Mail und Passwort; zur Bestätigung der E-Mail-Adresse und bei „Passwort vergessen“ schicken wir einmalige Links. Passwörter werden nur als gesalzener, nicht umkehrbarer Hash (PBKDF2) gespeichert, nie im Klartext. Wenn du deinen Kalender verknüpfst, liefern wir deine Termine über einen geheimen Link bzw. an die App, die du verbindest (z. B. Familienplaner). Es gibt keine Werbe- oder Analyse-Cookies und keine Inhalte von Drittanbietern. Ein technisch notwendiges Cookie hält die Anmeldung aufrecht.</p>
         <h2>Zweck und Rechtsgrundlage</h2>
         <p>Die Daten werden verarbeitet, um Termine anzubieten, zu buchen und darüber zu informieren (Vertragserfüllung bzw. vorvertragliche Maßnahmen, Art. 6 Abs. 1 lit. b DSGVO) sowie zur sicheren Bereitstellung des Dienstes (berechtigtes Interesse, Art. 6 Abs. 1 lit. f DSGVO).</p>
         <h2>Wer die Daten sieht</h2>
@@ -383,6 +384,16 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
           </form>
         </section>`,
         setup ? '' : await roleSection(c),
+        setup
+          ? ''
+          : html`<section class="card narrow" id="kontakt">
+              <h2>Anschrift &amp; Geburtstag</h2>
+              <p class="hint">Für Rechnungen deiner Lehrkräfte. Sichtbar nur für Lehrkräfte, bei denen du Mitglied bist oder gebucht hast – nie öffentlich. Alles ist freiwillig.</p>
+              <form method="post" action="/profile/contact" class="stack">
+                ${contactFields(user)}
+                <button class="btn btn-secondary" type="submit">Speichern</button>
+              </form>
+            </section>`,
         setup ? '' : await appSection(c),
         setup ? '' : await calendarSection(c),
         setup
@@ -440,6 +451,15 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     });
     const next = safeNextPath(str(f, 'next'));
     return next ? c.redirect(next, 303) : back(c, '/profile', 'saved');
+  });
+
+  app.post('/profile/contact', async (c) => {
+    const user = requireUser(c);
+    const f = await readForm(c);
+    const contact = readContact((k, max) => str(f, k, max));
+    if (contact === 'bad_birth_date') return back(c, '/profile', 'bad_birth_date');
+    await updateContact(c.get('deps').db, user.id, contact);
+    return back(c, '/profile', 'saved');
   });
 
   app.post('/profile/account-type', async (c) => {

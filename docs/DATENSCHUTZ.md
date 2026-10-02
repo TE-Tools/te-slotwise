@@ -10,6 +10,8 @@
 |---|---|---|
 | E-Mail-Adresse | Anmeldung, Benachrichtigungen | die Person selbst; Verwaltende von Bereichen, in denen sie Mitglied ist oder gebucht hat |
 | Vor- und Nachname | Zuordnung von Buchungen | wie oben |
+| Anschrift, Geburtstag, Telefon, abweichender Rechnungsempfänger (alles freiwillig) | Rechnungen, Kontakt | die Person selbst (Profil); Eigentümer:innen und Administrator:innen der Bereiche, in denen sie Mitglied ist oder gebucht hat (können sie auch pflegen) |
+| Gruppenzugehörigkeit und gewählte Gruppe einer Buchung (z. B. Instrument) | Unterrichtsplanung, Abrechnung | Verwaltende des Bereichs; die Person selbst |
 | Mitgliedschaften, Rollen, Gruppen | Berechtigungen | die Person sieht nur eigene Gruppen; Verwaltende sehen alle im eigenen Bereich |
 | Buchungen, Nachrichten, Verlauf | Terminverwaltung | die Person selbst und Verwaltende des Bereichs |
 | Anwesenheit, Preis und bezahlter Betrag pro Termin, individueller Preis | Abrechnung des Unterrichts (Schülerübersicht) | Eigentümer:innen und Administrator:innen des Bereichs; die Person selbst über den Datenexport |

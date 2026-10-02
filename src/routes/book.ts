@@ -21,6 +21,8 @@ interface ViewCtx {
   slotPage: (slotId: string) => string;
   loggedIn: boolean;
   loginHref: string;
+  /** Gruppen der angemeldeten Person (z. B. Instrumente) – bei mehreren wird beim Buchen gefragt, wofür. */
+  groups?: { id: string; name: string }[];
 }
 
 /** Freie Startzeiten in einem Zeitfenster (15-Minuten-Raster, ohne Überschneidung mit festen Buchungen, nicht in der Vergangenheit). */
@@ -45,6 +47,12 @@ function slotItem(s: VisibleSlotRow, v: ViewCtx, busy: { starts_at: string; ends
   const mine = s.my_status
     ? html`<p class="flash flash-ok">${s.my_status === 'confirmed' ? 'Von dir gebucht.' : 'Von dir angefragt.'} <a href="/bookings">Zu meinen Terminen</a></p>`
     : '';
+  // Wofür ist der Termin (z. B. welches Instrument)? Nur bei mehreren Gruppen fragen.
+  const groupField =
+    v.groups && v.groups.length > 1
+      ? html`<div class="field"><label for="g-${s.id}">Wofür? (z. B. Instrument)</label>
+          <select id="g-${s.id}" name="group_id" required><option value="">– bitte wählen –</option>${v.groups.map((g) => html`<option value="${g.id}">${g.name}</option>`)}</select></div>`
+      : '';
   const note = html`<details class="note-field"><summary>Nachricht hinzufügen (optional)</summary><label class="sr-only" for="note-${s.id}">Nachricht</label><textarea id="note-${s.id}" name="note" maxlength="1000" rows="2"></textarea></details>`;
 
   let action: H | '' = '';
@@ -58,12 +66,12 @@ function slotItem(s: VisibleSlotRow, v: ViewCtx, busy: { starts_at: string; ends
             <div class="field"><label for="t-${s.id}">Deine Startzeit (${durationLabel(s.duration_min)})</label>
               <select id="t-${s.id}" name="time" required>${free.map((t) => html`<option value="${t.time}">${t.time} – ${t.until} Uhr</option>`)}</select>
               <span class="hint">Freie Zeiten zwischen ${localTime(start, tz)} und ${localTime(end, tz)} Uhr.</span></div>
-            ${note}
+            ${groupField}${note}
             <button class="btn" type="submit">${verb}</button>
           </form>`
         : html`<p class="muted">In diesem Zeitfenster ist keine Zeit mehr frei.</p>`;
     } else {
-      action = html`<form method="post" action="${v.bookAction(s.id)}" class="stack">${note}<button class="btn" type="submit">${verb}</button></form>`;
+      action = html`<form method="post" action="${v.bookAction(s.id)}" class="stack">${groupField}${note}<button class="btn" type="submit">${verb}</button></form>`;
     }
   }
 
@@ -221,7 +229,7 @@ export function registerBookRoutes(app: Hono<AppEnv>) {
           : '',
         slotsView(
           c,
-          { ws, bookedDisplay: ws.show_booked_members, base: `/w/${ws.id}/book`, bookAction: (id) => `/w/${ws.id}/slots/${id}/book`, slotPage: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login' },
+          { ws, bookedDisplay: ws.show_booked_members, base: `/w/${ws.id}/book`, bookAction: (id) => `/w/${ws.id}/slots/${id}/book`, slotPage: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login', groups: await myGroups(c.get('deps').db, ws.id, ws.membership_id) },
           ws.membership_id,
           user.id,
         ),
@@ -249,7 +257,7 @@ export function registerBookRoutes(app: Hono<AppEnv>) {
         offering.location ? html`<p class="muted">Ort: ${offering.location}</p>` : '',
         slotsView(
           c,
-          { ws, bookedDisplay: ws.show_booked_members, base: c.req.path, bookAction: (id) => `/w/${ws.id}/slots/${id}/book?back=${encodeURIComponent(c.req.path)}`, slotPage: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login' },
+          { ws, bookedDisplay: ws.show_booked_members, base: c.req.path, bookAction: (id) => `/w/${ws.id}/slots/${id}/book?back=${encodeURIComponent(c.req.path)}`, slotPage: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login', groups: await myGroups(c.get('deps').db, ws.id, ws.membership_id) },
           ws.membership_id,
           user.id,
           offering.id,
@@ -278,7 +286,7 @@ export function registerBookRoutes(app: Hono<AppEnv>) {
 
   app.get('/w/:wid/slots/:sid/book', async (c) => {
     const { user, ws } = await requireWs(c, 'book');
-    const v: ViewCtx = { ws, bookedDisplay: ws.show_booked_members, base: `/w/${ws.id}/book`, bookAction: (id) => `/w/${ws.id}/slots/${id}/book`, slotPage: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login' };
+    const v: ViewCtx = { ws, bookedDisplay: ws.show_booked_members, base: `/w/${ws.id}/book`, bookAction: (id) => `/w/${ws.id}/slots/${id}/book`, slotPage: (id) => `/w/${ws.id}/slots/${id}/book`, loggedIn: true, loginHref: '/login', groups: await myGroups(c.get('deps').db, ws.id, ws.membership_id) };
     return render(c, { title: 'Termin buchen', ws, section: 'book', body: await slotPageBody(c, v, ws.membership_id, user.id, `/w/${ws.id}/book`) });
   });
 
@@ -295,6 +303,7 @@ export function registerBookRoutes(app: Hono<AppEnv>) {
       membershipId: ws.membership_id,
       note: str(f, 'note', 1000),
       time: str(f, 'time', 5) || undefined,
+      groupId: str(f, 'group_id', 50) || null,
     });
     kick();
     return back(c, r.ok ? '/bookings' : backTo, bookResultMsg(r));

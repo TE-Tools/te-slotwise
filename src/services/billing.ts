@@ -129,6 +129,16 @@ export interface StudentRow {
   role: string | null;
   /** individueller Preis (Cent) oder null */
   own_price_cents: number | null;
+  /** Mitgliedschaft im Bereich (null = extern, nur über öffentliche Seite gebucht) */
+  membership_id: string | null;
+  /** Gruppen (z. B. Instrumente), durch „, “ getrennt */
+  group_names: string | null;
+  address_street: string;
+  address_zip: string;
+  address_city: string;
+  birth_date: string | null;
+  phone: string;
+  billing_name: string;
 }
 
 /**
@@ -137,7 +147,9 @@ export interface StudentRow {
  */
 export async function listStudents(db: Db, wsId: string) {
   return await db.all<StudentRow>(
-    `SELECT u.id AS user_id, u.display_name, u.email, m.role, sr.price_cents AS own_price_cents
+    `SELECT u.id AS user_id, u.display_name, u.email, m.role, sr.price_cents AS own_price_cents, m.id AS membership_id,
+       (SELECT GROUP_CONCAT(name, ', ') FROM (SELECT g.name FROM group_members gm JOIN ws_groups g ON g.id = gm.group_id WHERE gm.membership_id = m.id ORDER BY g.name COLLATE NOCASE)) AS group_names,
+       u.address_street, u.address_zip, u.address_city, u.birth_date, u.phone, u.billing_name
      FROM users u
      LEFT JOIN memberships m ON m.user_id = u.id AND m.workspace_id = @ws
      LEFT JOIN student_rates sr ON sr.user_id = u.id AND sr.workspace_id = @ws
@@ -169,6 +181,8 @@ export interface LessonRow {
   paid_at: string | null;
   /** aktueller Satz (individuell oder Standard) in Cent */
   rate_cents: number | null;
+  /** gewählte Gruppe (z. B. Instrument) */
+  group_name: string | null;
   minutes: number;
 }
 
@@ -206,7 +220,8 @@ export async function listLessons(db: Db, wsId: string, f: { fromIso?: string; t
   const rows = await db.all<Omit<LessonRow, 'rate_cents' | 'minutes'> & { own_rate: number | null; default_rate: number | null; price_unit: PriceUnit }>(
     `SELECT b.id, b.user_id, u.display_name AS student_name, u.email AS student_email, o.name AS offering_name, b.status,
        b.starts_at, b.ends_at, s.timezone, b.attendance, b.price_cents, b.paid_cents, b.paid_at,
-       sr.price_cents AS own_rate, w.default_price_cents AS default_rate, w.price_unit
+       sr.price_cents AS own_rate, w.default_price_cents AS default_rate, w.price_unit,
+       (SELECT g.name FROM ws_groups g WHERE g.id = b.group_id) AS group_name
      FROM bookings b
      JOIN slots s ON s.id = b.slot_id AND s.workspace_id = b.workspace_id
      JOIN offerings o ON o.id = b.offering_id AND o.workspace_id = b.workspace_id
