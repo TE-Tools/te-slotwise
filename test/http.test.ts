@@ -535,3 +535,21 @@ test('Freies Zeitfenster: Lehrkraft gibt von–bis frei, Schüler:innen wählen 
   // „Woche wiederholen“ übernimmt auch Zeitfenster.
   assert.match(await (await owner.req(`/w/${wsId}/calendar?week=${day}`)).text(), /Woche übernehmen/);
 });
+
+test('Meine Termine: Lehrkraft sieht ihre Unterrichtstermine (bestätigt und angefragt)', async () => {
+  const { app, mailer, db } = await setup();
+  const owner = await login(app, mailer, 'lehrer3@example.com', 'Lars Lehrer');
+  // Ohne Arbeitsbereich: normale leere Seite.
+  assert.match(await (await owner.req('/bookings')).text(), /Keine anstehenden Termine/);
+  const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Flöte', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
+  const offId = /offerings\/([^?]+)/.exec((await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Flötenstunde', duration_min: '45', confirmation_mode: 'manual', visibility: 'internal' } })).headers.get('location')!)![1];
+  await login(app, mailer, 'paula@example.com', 'Paula Pfeife');
+  const pid = (await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'paula@example.com'`))!.id;
+  await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES ('m-paula', ?, ?, 'member', ?)`, [wsId, pid, new Date().toISOString()]);
+  await owner.req(`/w/${wsId}/students/${pid}/lessons`, { method: 'POST', form: { offering_id: offId, date: futureDate(2), time: '15:00', duration: '', repeat: 'weekly', count: '3' } });
+  const page = await (await owner.req('/bookings')).text();
+  assert.match(page, /Meine Unterrichtstermine/);
+  assert.equal((page.match(/Paula Pfeife<\/strong> · Flötenstunde/g) ?? []).length, 3);
+  assert.match(page, /bestätigt/);
+  assert.match(await (await owner.req('/dashboard')).text(), /Paula Pfeife/);
+});
