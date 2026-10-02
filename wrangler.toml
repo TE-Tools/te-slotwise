@@ -22,5 +22,5 @@ RETENTION_BOOKING_DAYS = "0"
 # Für Impressum und Datenschutz – bitte ausfüllen. Mehrzeilige Adresse mit | trennen.
 OPERATOR_NAME = "TE-Digital (vormals TE-Alltagshelfer)|Inhaber: Thomas Elsen"
 OPERATOR_ADDRESS = "Holbeinstraße 6, 41470 Neuss"
-OPERATOR_EMAIL = ""
-OPERATOR_PHONE = ""
+OPERATOR_EMAIL = "te-alltagshelfer@outlook.de"
+OPERATOR_PHONE = "0151 58044441"
