@@ -27,7 +27,9 @@ import {
   listSlotsAdmin,
   SlotError,
   slotState,
-  updateSlot,
+  followingInSeries,
+  updateSlots,
+  type SlotChangeResult,
   type BulkAction,
   type SlotInput,
   type SlotKind,
@@ -1014,26 +1016,56 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     }
   });
 
-  const editSlotPage = async (c: Ctx, ws: WsContext, slotId: string, error?: string) => {
+  const editSlotPage = async (c: Ctx, ws: WsContext, slotId: string, error?: string, result?: SlotChangeResult) => {
     const { db } = c.get('deps');
     const s = await getSlot(db, ws.id, slotId);
     if (!s) notFound();
     const start = Date.parse(s.starts_at);
     const end = Date.parse(s.ends_at);
     const bookings = await listWorkspaceBookings(db, ws.id, { slotId: s.id });
+    const following = await followingInSeries(db, ws.id, s);
+    const activeBookings = s.confirmed + s.requested;
     return page(c, ws, 'slots', 'Slot bearbeiten', [
-      flash(c.req.query('msg')),
+      flash(c.req.query('msg'), c.req.query('n') ? `(${Number(c.req.query('n'))} geändert${Number(c.req.query('c')) ? `, ${Number(c.req.query('c'))} neu` : ''})` : undefined),
       errorBox(error),
+      result && result.skipped.length
+        ? html`<div class="flash flash-info" role="status"><strong>Gespeichert – mit Ausnahmen:</strong>
+            <ul>${result.skipped.map((x) => html`<li>${formatDate(Date.parse(x.startsAt), x.timezone)}, ${formatTime(Date.parse(x.startsAt), x.timezone)} Uhr: ${x.reason}</li>`)}</ul>
+            ${result.updated ? html`<p>${result.updated} Slot(s) geändert${result.created ? `, ${result.created} neu angelegt` : ''}.</p>` : ''}</div>`
+        : '',
       pageHeader(`${s.offering_name}: ${s.kind === 'window' ? 'Zeitfenster' : 'Slot'} bearbeiten`, undefined, slotStateBadge(slotState(s))),
       html`<section class="card"><form method="post" action="/w/${ws.id}/slots/${s.id}" class="stack">
-        <input type="hidden" name="kind" value="${s.kind}">
+        <fieldset class="field"><legend>Art</legend>
+          <div class="segmented-radio">
+            <label><input type="radio" name="kind" value="fixed" ${checked(s.kind === 'fixed')}> Fester Termin</label>
+            <label><input type="radio" name="kind" value="window" ${checked(s.kind === 'window')}> Freies Zeitfenster</label>
+          </div>
+          <span class="hint">${activeBookings
+            ? 'Die Art lässt sich erst ändern, wenn es keine offenen oder bestätigten Buchungen mehr gibt.'
+            : s.kind === 'window'
+              ? 'Wird das Zeitfenster zu festen Terminen, wird es in Termine der Angebotsdauer aufgeteilt.'
+              : 'Ein fester Termin wird zum Zeitfenster gleicher Länge – Schüler:innen wählen darin ihre Startzeit.'}</span>
+        </fieldset>
         <div class="grid-form">
           <label>Datum <input type="date" name="date" required value="${localDate(start, s.timezone)}"></label>
           <label>Beginn <input type="time" name="time" required step="300" value="${localTime(start, s.timezone)}"></label>
           <label>${s.kind === 'window' ? 'Länge des Fensters' : 'Dauer'} (Min.) <input type="number" name="duration" min="5" max="1440" step="5" required value="${Math.round((end - start) / 60000)}"></label>
         </div>
-        <p class="hint">Zeitzone dieses Slots: ${s.timezone}</p>
+        <p class="hint">Zeitzone dieses Slots: ${s.timezone}.${activeBookings
+          ? s.kind === 'window'
+            ? ' Das Zeitfenster lässt sich verlängern oder verkürzen, solange alle Buchungen darin Platz haben.'
+            : ' Dieser Termin ist gebucht – die Zeit bleibt, bis die Buchung abgesagt oder verschoben ist.'
+          : ''}</p>
         ${slotCommonFields(c, ws, { capacity: s.capacity, location: s.location, online: s.online_info, mode: s.confirmation_mode ?? '', visibility: s.visibility, status: s.status, buffer: s.buffer_min, preference: s.preference }, await getAudience(db, 'slot', ws.id, s.id))}
+        ${following > 1
+          ? html`<fieldset class="field"><legend>Was soll geändert werden?</legend>
+              <div class="segmented-radio">
+                <label><input type="radio" name="scope" value="one" checked> Nur dieser Slot</label>
+                <label><input type="radio" name="scope" value="following"> Dieser und alle folgenden der Serie (${following})</label>
+              </div>
+              <span class="hint">Bei der Serie wird eine Verschiebung (anderer Tag oder andere Uhrzeit) auf alle folgenden Slots übertragen; Dauer, Art und Einstellungen gelten für alle. Gebuchte Slots behalten ihre Zeit – du siehst danach, welche.</span>
+            </fieldset>`
+          : ''}
         <button class="btn" type="submit">Speichern</button>
       </form></section>`,
       html`<section class="card"><h2>Buchungen zu diesem Slot</h2>
@@ -1054,13 +1086,17 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     if (!s) notFound();
     const off = (await getOffering(db, ws.id, s.offering_id))!;
     const f = await readForm(c);
+    const kind = oneOf(str(f, 'kind'), ['fixed', 'window'] as const, s.kind);
+    const scope = str(f, 'scope') === 'following' ? 'following' : 'one';
+    let r: SlotChangeResult;
     try {
-      await updateSlot(db, ws.id, s.id, s.timezone, str(f, 'date', 10), str(f, 'time', 5), readSlotInput(f, off, s.kind, int(f, 'duration', 5, 1440, off.duration_min)));
+      r = await updateSlots(db, ws.id, s.id, { date: str(f, 'date', 10), time: str(f, 'time', 5), input: readSlotInput(f, off, kind, int(f, 'duration', 5, 1440, off.duration_min)) }, scope);
     } catch (e) {
       if (e instanceof SlotError || e instanceof LocalTimeError) return editSlotPage(c, ws, s.id, e.message);
       throw e;
     }
-    return back(c, `/w/${ws.id}/slots/${s.id}`, 'saved');
+    if (r.skipped.length) return editSlotPage(c, ws, s.id, undefined, r);
+    return c.redirect(`/w/${ws.id}/slots/${s.id}?msg=saved${scope === 'following' || r.created ? `&n=${r.updated}&c=${r.created}` : ''}`, 303);
   });
 
   // ---------- Buchungen ----------
