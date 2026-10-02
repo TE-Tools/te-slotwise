@@ -138,3 +138,34 @@ test('Alle folgenden der Serie ändern: neue Zeiten, gebuchte Slots werden gemel
   const days = await db.all<{ starts_at: string }>(`SELECT starts_at FROM slots WHERE id IN (?, ?) ORDER BY starts_at`, [slots[2].id, slots[3].id]);
   assert.deepEqual(days.map((d) => `${localDate(Date.parse(d.starts_at), 'Europe/Berlin')} ${localTime(Date.parse(d.starts_at), 'Europe/Berlin')}`), [`${addDays(mon, 15)} 15:00`, `${addDays(mon, 22)} 15:00`]);
 });
+
+// ---------- Löschen ----------
+import { deleteSlots, seriesFromIds } from '../src/services/slots.ts';
+import { providerDecision } from '../src/services/bookings.ts';
+
+test('Slots löschen: ohne aktive Buchung ja (auch mit alten Absagen), mit aktiver oder abgerechneter Buchung nein', async () => {
+  const db = await freshDb();
+  const { owner, wsId, offeringId } = await setupWorkspace(db, { duration_min: 60, confirmation_mode: 'auto', visibility: 'internal' });
+  const off = (await getOffering(db, wsId, offeringId))!;
+  const mon = nextMonday();
+  await createSeries(db, wsId, owner.id, off, 'Europe/Berlin', { fromDate: mon, toDate: addDays(mon, 27), weekdays: [1], windowStart: '16:00', windowEnd: '17:00' }, input('fixed', 60));
+  const ids = (await db.all<{ id: string }>(`SELECT id FROM slots WHERE workspace_id = ? ORDER BY starts_at`, [wsId])).map((r) => r.id);
+  const kid = await makeUser(db, `k-${Math.random()}@example.com`, 'Kai Kurz');
+  const mid = await addMember(db, wsId, kid.id);
+  // Woche 1: gebucht (aktiv). Woche 2: gebucht und wieder abgesagt. Woche 3: frei.
+  const b1 = await requestBooking(db, 'http://x', { workspaceId: wsId, slotId: ids[0], userId: kid.id, membershipId: mid, note: '' });
+  const b2 = await requestBooking(db, 'http://x', { workspaceId: wsId, slotId: ids[1], userId: kid.id, membershipId: mid, note: '' });
+  assert.ok(b1.ok && b2.ok);
+  await providerDecision(db, 'http://x', wsId, b2.ok ? b2.bookingId : '', owner.id, 'cancel');
+  const r = await deleteSlots(db, wsId, ids.slice(0, 3));
+  assert.equal(r.deleted, 2);
+  assert.equal(r.blocked.length, 1);
+  assert.match(r.blocked[0].reason, /aktive Buchung/);
+  // Ganze Serie ab Woche 1: nur noch der gebuchte bleibt.
+  assert.equal((await seriesFromIds(db, wsId, ids[0])).length, 2);
+  await deleteSlots(db, wsId, await seriesFromIds(db, wsId, ids[0]));
+  assert.deepEqual((await db.all<{ id: string }>(`SELECT id FROM slots WHERE workspace_id = ?`, [wsId])).map((r) => r.id), [ids[0]]);
+  // Abgehakte Stunde bleibt auch nach Absage erhalten.
+  await db.run(`UPDATE bookings SET status = 'cancelled', attendance = 'absent_billed', price_cents = 3000 WHERE id = ?`, [b1.ok ? b1.bookingId : '']);
+  assert.match((await deleteSlots(db, wsId, [ids[0]])).blocked[0].reason, /Abrechnung/);
+});

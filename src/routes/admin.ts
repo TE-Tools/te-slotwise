@@ -27,7 +27,9 @@ import {
   listSlotsAdmin,
   SlotError,
   slotState,
+  deleteSlots,
   followingInSeries,
+  seriesFromIds,
   updateSlots,
   type SlotChangeResult,
   type BulkAction,
@@ -727,7 +729,14 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
 
     const rows = view === 'calendar' && !day ? [] : slots;
     return page(c, ws, 'slots', 'Slots', [
-      flash(c.req.query('msg'), c.req.query('n') ? `(${Number(c.req.query('n'))} erledigt${Number(c.req.query('k')) ? `, ${Number(c.req.query('k'))} übersprungen` : ''})` : undefined),
+      flash(
+        c.req.query('msg'),
+        c.req.query('n')
+          ? c.req.query('msg') === 'slots_deleted'
+            ? `(${Number(c.req.query('n'))} gelöscht${Number(c.req.query('k')) ? `, ${Number(c.req.query('k'))} nicht – aktive Buchung oder schon abgerechnet` : ''})`
+            : `(${Number(c.req.query('n'))} erledigt${Number(c.req.query('k')) ? `, ${Number(c.req.query('k'))} übersprungen` : ''})`
+          : undefined,
+      ),
       pageHeader('Slots & Zeitfenster', `Zeiten in ${tz}.`, html`<a class="btn" href="/w/${ws.id}/slots/new">Neu anlegen</a>`),
       html`<form method="get" action="/w/${ws.id}/slots" class="filters">
         ${view === 'calendar' ? html`<input type="hidden" name="view" value="calendar"><input type="hidden" name="month" value="${month}">` : ''}
@@ -774,11 +783,11 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
                   { value: 'reluctant', label: 'Gelb markieren (eher ungern)' },
                   { value: 'close', label: 'Schließen (keine neuen Buchungen)' },
                   { value: 'unpublish', label: 'Zurückziehen (Entwurf, nur ohne aktive Buchungen)' },
-                  { value: 'delete', label: 'Löschen (nur ohne Buchungen)' },
                 ],
                 'publish',
               )}</select>
               <button class="btn btn-secondary" type="submit">Ausführen</button>
+              <button class="btn btn-danger" type="submit" name="delete" value="1" data-confirm="Ausgewählte Slots löschen? Slots mit aktiven Buchungen bleiben erhalten.">Ausgewählte löschen</button>
             </div>
           </form>`
         : view === 'calendar' && !day
@@ -790,9 +799,10 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
   app.post('/w/:wid/slots/bulk', async (c) => {
     const { ws } = await requireWs(c, 'slots.manage');
     const f = await readForm(c);
-    const action = oneOf(str(f, 'action'), ['publish', 'unpublish', 'close', 'delete', 'normal', 'reluctant'] as BulkAction[], 'publish');
+    // Eigener Knopf „Ausgewählte löschen“ – sonst die Aktion aus der Auswahl.
+    const action = str(f, 'delete') === '1' ? 'delete' : oneOf(str(f, 'action'), ['publish', 'unpublish', 'close', 'delete', 'normal', 'reluctant'] as BulkAction[], 'publish');
     const r = await bulkSlots(c.get('deps').db, ws.id, list(f, 'ids'), action);
-    return c.redirect(`/w/${ws.id}/slots?msg=bulk_done&n=${r.done}&k=${r.skipped}`, 303);
+    return c.redirect(`/w/${ws.id}/slots?msg=${action === 'delete' ? 'slots_deleted' : 'bulk_done'}&n=${r.done}&k=${r.skipped}`, 303);
   });
 
   const slotCommonFields = (c: Ctx, ws: WsContext, v: { capacity: number; location: string | null; online: string | null; mode: string; visibility: SlotVisibility; status: string; buffer: number; preference: string }, audience: Audience) => html`
@@ -1048,9 +1058,11 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         </fieldset>
         <div class="grid-form">
           <label>Datum <input type="date" name="date" required value="${localDate(start, s.timezone)}"></label>
-          <label>Beginn <input type="time" name="time" required step="300" value="${localTime(start, s.timezone)}"></label>
-          <label>${s.kind === 'window' ? 'Länge des Fensters' : 'Dauer'} (Min.) <input type="number" name="duration" min="5" max="1440" step="5" required value="${Math.round((end - start) / 60000)}"></label>
+          <label>Von <input type="time" name="time" required step="300" value="${localTime(start, s.timezone)}"></label>
+          <label>Bis <input type="time" name="end_time" required step="300" value="${localTime(end, s.timezone)}"></label>
         </div>
+        <p class="hint" data-kind-hint="fixed" ${s.kind === 'fixed' ? '' : raw('hidden')}>Fester Termin: genau diese Zeit ist buchbar.${s.kind === 'window' ? ' Beim Umwandeln wird die Zeitspanne in Termine der Angebotsdauer aufgeteilt.' : ''}</p>
+        <p class="hint" data-kind-hint="window" ${s.kind === 'window' ? '' : raw('hidden')}>Freies Zeitfenster: Schüler:innen wählen zwischen „Von“ und „Bis“ ihre Startzeit (Dauer laut Angebot).</p>
         <p class="hint">Zeitzone dieses Slots: ${s.timezone}.${activeBookings
           ? s.kind === 'window'
             ? ' Das Zeitfenster lässt sich verlängern oder verkürzen, solange alle Buchungen darin Platz haben.'
@@ -1071,8 +1083,32 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
       html`<section class="card"><h2>Buchungen zu diesem Slot</h2>
         ${bookings.length ? bookingTable(ws, bookings) : html`<p class="muted">Keine Buchungen.</p>`}
       </section>`,
+      html`<section class="card danger-zone"><h2>Löschen</h2>
+        ${activeBookings
+          ? html`<p class="muted">Dieser Slot hat eine aktive Buchung. Sage sie zuerst ab oder verschiebe sie, dann lässt er sich löschen.</p>`
+          : html`<div class="actions">
+              <form method="post" action="/w/${ws.id}/slots/${s.id}/delete" class="inline" data-confirm="Diesen Slot löschen?"><input type="hidden" name="scope" value="one"><button class="btn btn-danger" type="submit">Diesen Slot löschen</button></form>
+              ${following > 1
+                ? html`<form method="post" action="/w/${ws.id}/slots/${s.id}/delete" class="inline" data-confirm="Diesen und alle folgenden ${following} Slots der Serie löschen? Gebuchte Slots bleiben erhalten."><input type="hidden" name="scope" value="following"><button class="btn btn-danger" type="submit">Diesen und alle folgenden der Serie löschen (${following})</button></form>`
+                : ''}
+            </div>`}
+        ${activeBookings && following > 1
+          ? html`<form method="post" action="/w/${ws.id}/slots/${s.id}/delete" class="inline" data-confirm="Alle folgenden Slots der Serie löschen? Gebuchte Slots bleiben erhalten."><input type="hidden" name="scope" value="following"><button class="btn btn-danger" type="submit">Alle folgenden der Serie löschen (gebuchte bleiben)</button></form>`
+          : ''}
+      </section>`,
     ]);
   };
+
+  app.post('/w/:wid/slots/:sid/delete', async (c) => {
+    const { ws } = await requireWs(c, 'slots.manage');
+    const { db } = c.get('deps');
+    const f = await readForm(c);
+    const ids = str(f, 'scope') === 'following' ? await seriesFromIds(db, ws.id, c.req.param('sid')) : [c.req.param('sid')];
+    if (!ids.length) notFound();
+    const r = await deleteSlots(db, ws.id, ids);
+    if (r.blocked.length && !r.deleted) return editSlotPage(c, ws, c.req.param('sid'), `Nicht gelöscht: ${r.blocked[0].reason}.`);
+    return c.redirect(`/w/${ws.id}/slots?msg=slots_deleted&n=${r.deleted}&k=${r.blocked.length}`, 303);
+  });
 
   app.get('/w/:wid/slots/:sid', async (c) => {
     const { ws } = await requireWs(c, 'slots.manage');
@@ -1088,9 +1124,18 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     const f = await readForm(c);
     const kind = oneOf(str(f, 'kind'), ['fixed', 'window'] as const, s.kind);
     const scope = str(f, 'scope') === 'following' ? 'following' : 'one';
+    // Von–Bis (neues Formular) oder Dauer (älteres Formular).
+    const hm = (v: string) => (/^\d{2}:\d{2}$/.test(v) ? +v.slice(0, 2) * 60 + +v.slice(3) : null);
+    const from = hm(str(f, 'time', 5));
+    const to = hm(str(f, 'end_time', 5));
+    let duration = int(f, 'duration', 5, 1440, off.duration_min);
+    if (from !== null && to !== null) {
+      if (to <= from) return editSlotPage(c, ws, s.id, '„Bis“ muss nach „Von“ liegen.');
+      duration = to - from;
+    }
     let r: SlotChangeResult;
     try {
-      r = await updateSlots(db, ws.id, s.id, { date: str(f, 'date', 10), time: str(f, 'time', 5), input: readSlotInput(f, off, kind, int(f, 'duration', 5, 1440, off.duration_min)) }, scope);
+      r = await updateSlots(db, ws.id, s.id, { date: str(f, 'date', 10), time: str(f, 'time', 5), input: readSlotInput(f, off, kind, duration) }, scope);
     } catch (e) {
       if (e instanceof SlotError || e instanceof LocalTimeError) return editSlotPage(c, ws, s.id, e.message);
       throw e;

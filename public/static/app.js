@@ -309,4 +309,21 @@
     slotForm.addEventListener('change', update);
     update();
   }
+  // Rückfrage bei einzelnen Knöpfen (z. B. „Ausgewählte löschen“ in einem größeren Formular).
+  document.querySelectorAll('button[data-confirm]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      if (!window.confirm(btn.getAttribute('data-confirm'))) e.preventDefault();
+    });
+  });
+
+  // Slot bearbeiten: Hinweis passend zur gewählten Art (fest / Zeitfenster).
+  document.querySelectorAll('[data-kind-hint]').forEach(function (hint) {
+    var form = hint.closest('form');
+    if (!form) return;
+    var update = function () {
+      var kind = (form.querySelector('input[name="kind"]:checked') || {}).value;
+      hint.hidden = hint.getAttribute('data-kind-hint') !== kind;
+    };
+    form.addEventListener('change', update);
+  });
 })();
