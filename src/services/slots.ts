@@ -256,43 +256,148 @@ export async function getSlot(db: Db, wsId: string, slotId: string) {
   );
 }
 
-export async function updateSlot(db: Db, wsId: string, slotId: string, tz: string, date: string, time: string, p: SlotInput) {
+export interface SlotChange {
+  /** neues Datum (YYYY-MM-DD, Ortszeit) und neue Startzeit (HH:MM) des bearbeiteten Slots */
+  date: string;
+  time: string;
+  /** neue Art und Einstellungen; durationMin = Dauer (fest) bzw. Länge des Fensters */
+  input: SlotInput;
+}
+
+export interface SlotChangeResult {
+  /** geänderte Slots (ohne neu entstandene) */
+  updated: number;
+  /** beim Aufteilen eines Zeitfensters in feste Termine zusätzlich angelegt */
+  created: number;
+  /** nicht (vollständig) geänderte Slots mit Grund */
+  skipped: { startsAt: string; timezone: string; reason: string }[];
+}
+
+const minutesOfDay = (ms: number, tz: string) => {
+  const t = localTime(ms, tz);
+  return +t.slice(0, 2) * 60 + +t.slice(3);
+};
+
+/**
+ * Ändert einen Slot. Regeln:
+ * - Einstellungen (Plätze, Ort, Sichtbarkeit …) gehen immer.
+ * - Zeit/Dauer: ohne aktive Buchungen frei. Bei Zeitfenstern auch mit Buchungen, solange alle
+ *   Buchungen danach noch im Fenster liegen. Bei festen Terminen mit Buchungen bleibt die Zeit.
+ * - Art (fest ↔ Zeitfenster) nur ohne aktive Buchungen. Ein Zeitfenster wird beim Umwandeln in
+ *   feste Termine der Angebotsdauer aufgeteilt (der erste Termin ist der bisherige Slot).
+ * Liefert einen Grund, wenn die Zeit- oder Art-Änderung nicht ging (Einstellungen werden trotzdem übernommen).
+ */
+async function applyChange(db: Db, wsId: string, slot: AdminSlotRow, off: Offering, startMs: number, p: SlotInput): Promise<{ created: number; reason: string | null }> {
+  const endMs = startMs + p.durationMin * 60_000;
+  const active = await db.all<{ starts_at: string; ends_at: string }>(
+    `SELECT starts_at, ends_at FROM bookings WHERE slot_id = ? AND workspace_id = ? AND status IN ('requested','confirmed')`,
+    [slot.id, wsId],
+  );
+  const timeChanged = nowIso(startMs) !== slot.starts_at || nowIso(endMs) !== slot.ends_at;
+  const kindChanged = p.kind !== slot.kind;
+  let reason: string | null = null;
+  let keepTime = false;
+  let kind = p.kind;
+  if (kindChanged && active.length) {
+    reason = 'hat Buchungen – Art bleibt unverändert';
+    kind = slot.kind;
+    keepTime = true;
+  } else if (timeChanged && active.length) {
+    if (slot.kind === 'fixed') {
+      reason = 'ist gebucht – Zeit bleibt unverändert';
+      keepTime = true;
+    } else if (!active.every((b) => Date.parse(b.starts_at) >= startMs && Date.parse(b.ends_at) <= endMs)) {
+      reason = 'Buchungen passen nicht mehr ins neue Zeitfenster – Zeit bleibt unverändert';
+      keepTime = true;
+    }
+  }
+  let start = keepTime ? Date.parse(slot.starts_at) : startMs;
+  let end = keepTime ? Date.parse(slot.ends_at) : endMs;
+  // Zeitfenster → feste Termine: in Termine der Angebotsdauer aufteilen.
+  const pieces: number[] = [];
+  if (kind === 'fixed' && slot.kind === 'window') {
+    const step = (off.duration_min + p.bufferMin) * 60_000;
+    for (let t = start; t + off.duration_min * 60_000 <= end; t += step) pieces.push(t);
+    if (!pieces.length) return { created: 0, reason: 'Zeitspanne ist kürzer als ein Termin – Art bleibt unverändert' };
+    end = start + off.duration_min * 60_000;
+  }
+  if (kind === 'window' && (end - start) / 60_000 < off.duration_min) {
+    if (keepTime) return { created: 0, reason };
+    return { created: 0, reason: `Zeitfenster ist kürzer als ein Termin (${off.duration_min} Min.) – nichts geändert` };
+  }
+  if (kind === 'fixed' && p.capacity < slot.taken) return { created: 0, reason: `Plätze dürfen nicht unter die belegten (${slot.taken}) sinken` };
+  if ((!keepTime || kind !== slot.kind) && (await overlaps(db, wsId, slot.offering_id, start, end, p.bufferMin, slot.id))) {
+    return { created: 0, reason: 'würde sich mit einem anderen Slot überschneiden – nichts geändert' };
+  }
+  await db.run(
+    `UPDATE slots SET kind = ?, starts_at = ?, ends_at = ?, buffer_min = ?, location = ?, online_info = ?, capacity = ?, confirmation_mode = ?,
+     status = ?, preference = ?, visibility = ?, updated_at = ? WHERE id = ? AND workspace_id = ?`,
+    [kind, nowIso(start), nowIso(end), p.bufferMin, p.location, p.onlineInfo, p.capacity, p.confirmationMode, p.status, p.preference, p.visibility, nowIso(), slot.id, wsId],
+  );
+  await setAudience(db, 'slot', wsId, slot.id, p.visibility === 'groups' || p.visibility === 'people' ? p.audience : { groupIds: [], membershipIds: [] });
+  let created = 0;
+  for (const t of pieces.slice(1)) {
+    if (await overlaps(db, wsId, slot.offering_id, t, t + off.duration_min * 60_000, p.bufferMin, null)) continue;
+    await insertSlot(db, wsId, off, slot.series_id, t, slot.timezone, { ...p, kind: 'fixed', durationMin: off.duration_min });
+    created++;
+  }
+  return { created, reason };
+}
+
+/** Wie viele Slots der Serie liegen ab diesem Slot (einschließlich)? */
+export async function followingInSeries(db: Db, wsId: string, slot: Pick<Slot, 'series_id' | 'starts_at'>) {
+  if (!slot.series_id) return 0;
+  return (await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM slots WHERE workspace_id = ? AND series_id = ? AND starts_at >= ?`, [wsId, slot.series_id, slot.starts_at]))!.n;
+}
+
+/**
+ * Ändert einen Slot oder ihn und alle folgenden Slots derselben Serie. Bei der Serie wird die
+ * Verschiebung übertragen (anderer Tag und/oder andere Uhrzeit, gerechnet in Ortszeit) und die neue
+ * Dauer übernommen; Art und Einstellungen gelten für alle. Slots, die wegen Buchungen oder
+ * Überschneidungen nicht (vollständig) geändert werden können, stehen in `skipped`.
+ */
+export async function updateSlots(db: Db, wsId: string, slotId: string, change: SlotChange, scope: 'one' | 'following'): Promise<SlotChangeResult> {
   return await db.tx(async () => {
     const slot = await getSlot(db, wsId, slotId);
     if (!slot) throw new SlotError('Slot nicht gefunden.');
-    const start = localToUtc(date, time, tz);
-    const end = start + p.durationMin * 60_000;
-    const active = slot.confirmed + slot.requested;
-    const timeChanged = nowIso(start) !== slot.starts_at || nowIso(end) !== slot.ends_at || tz !== slot.timezone;
-    if (active > 0 && timeChanged) {
-      throw new SlotError('Zeit und Dauer lassen sich nicht ändern, solange es offene oder bestätigte Buchungen gibt. Bitte diese zuerst absagen.');
+    const off = await db.get<Offering>(`SELECT * FROM offerings WHERE id = ? AND workspace_id = ?`, [slot.offering_id, wsId]);
+    if (!off) throw new SlotError('Angebot nicht gefunden.');
+    const newStart = localToUtc(change.date, change.time, slot.timezone);
+    const dayShift = Math.round((Date.parse(`${change.date}T00:00:00Z`) - Date.parse(`${localDate(Date.parse(slot.starts_at), slot.timezone)}T00:00:00Z`)) / 86_400_000);
+    const minuteShift = minutesOfDay(newStart, slot.timezone) - minutesOfDay(Date.parse(slot.starts_at), slot.timezone);
+    let targets: AdminSlotRow[] = [slot];
+    if (scope === 'following' && slot.series_id) {
+      targets = await db.all<AdminSlotRow>(
+        `SELECT s.*, o.name AS offering_name, ${COUNTS_SQL} FROM slots s JOIN offerings o ON o.id = s.offering_id
+         WHERE s.workspace_id = ? AND s.series_id = ? AND s.starts_at >= ? ORDER BY s.starts_at`,
+        [wsId, slot.series_id, slot.starts_at],
+      );
+      // Bei Verschiebung nach hinten von hinten anfangen, damit sich Slots einer Serie nicht gegenseitig blockieren.
+      if (dayShift * 1440 + minuteShift > 0) targets.reverse();
     }
-    if (p.kind !== slot.kind) throw new SlotError('Die Art eines Slots lässt sich nachträglich nicht ändern.');
-    if (p.capacity < slot.taken && slot.kind === 'fixed') throw new SlotError(`Die Kapazität darf nicht unter die belegten Plätze (${slot.taken}) sinken.`);
-    if (await overlaps(db, wsId, slot.offering_id, start, end, p.bufferMin, slotId)) {
-      throw new SlotError('Dieser Slot überschneidet sich (inklusive Pufferzeit) mit einem vorhandenen Slot desselben Angebots.');
+    const result: SlotChangeResult = { updated: 0, created: 0, skipped: [] };
+    for (const t of targets) {
+      let start = newStart;
+      if (t.id !== slot.id) {
+        const m = minutesOfDay(Date.parse(t.starts_at), t.timezone) + minuteShift;
+        const day = addDays(localDate(Date.parse(t.starts_at), t.timezone), dayShift + Math.floor(m / 1440));
+        const mm = ((m % 1440) + 1440) % 1440;
+        try {
+          start = localToUtc(day, `${String(Math.floor(mm / 60)).padStart(2, '0')}:${String(mm % 60).padStart(2, '0')}`, t.timezone);
+        } catch (e) {
+          if (!(e instanceof LocalTimeError)) throw e;
+          result.skipped.push({ startsAt: t.starts_at, timezone: t.timezone, reason: 'Uhrzeit existiert an diesem Tag nicht (Zeitumstellung)' });
+          continue;
+        }
+      }
+      const r = await applyChange(db, wsId, t, off, start, change.input);
+      if (r.reason) result.skipped.push({ startsAt: t.starts_at, timezone: t.timezone, reason: r.reason });
+      if (!r.reason || !r.reason.includes('nichts geändert')) result.updated++;
+      result.created += r.created;
     }
-    await db.run(
-      `UPDATE slots SET starts_at = ?, ends_at = ?, timezone = ?, buffer_min = ?, location = ?, online_info = ?, capacity = ?, confirmation_mode = ?,
-       status = ?, preference = ?, visibility = ?, updated_at = ? WHERE id = ? AND workspace_id = ?`,
-      [
-        nowIso(start),
-        nowIso(end),
-        tz,
-        p.bufferMin,
-        p.location,
-        p.onlineInfo,
-        p.capacity,
-        p.confirmationMode,
-        p.status,
-        p.preference,
-        p.visibility,
-        nowIso(),
-        slotId,
-        wsId,
-      ],
-    );
-    await setAudience(db, 'slot', wsId, slotId, p.visibility === 'groups' || p.visibility === 'people' ? p.audience : { groupIds: [], membershipIds: [] });
+    // Nur ein Slot und gar nichts ging: als Fehler melden (wie bisher).
+    if (scope === 'one' && result.skipped.length && result.skipped[0].reason.includes('nichts geändert')) throw new SlotError(`Nicht gespeichert: ${result.skipped[0].reason}.`);
+    return result;
   });
 }
 
