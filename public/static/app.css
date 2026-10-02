@@ -1365,3 +1365,34 @@ input.money {
   width: 100%;
   text-align: center;
 }
+/* Slots anlegen: Wiederholung als große Schalter */
+.segmented-radio {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.segmented-radio label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: pointer;
+  min-height: 44px;
+}
+.segmented-radio label:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.slot-preview {
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius);
+  background: var(--info-soft);
+  color: var(--info);
+}
+.repeat-week .filters {
+  margin: 0;
+}

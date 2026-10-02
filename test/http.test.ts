@@ -472,3 +472,31 @@ test('Kalender-Abo (iCalendar) und Schnittstelle für den Familienplaner', async
   assert.equal((await api('/api/me/termine', { token })).status, 401);
   assert.equal((await api('/api/me/termine')).status, 401);
 });
+
+test('Slots einfach anlegen: jede Woche für 4 Wochen; feste wöchentliche Stunde für Schüler:in', async () => {
+  const { app, mailer, db } = await setup();
+  const owner = await login(app, mailer, 'wochen@example.com', 'Wanda Woche');
+  const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Geige', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
+  const offId = /offerings\/([^?]+)/.exec((await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Geigenstunde', duration_min: '30', confirmation_mode: 'manual', visibility: 'internal' } })).headers.get('location')!)![1];
+  const form = await (await owner.req(`/w/${wsId}/slots/new`)).text();
+  assert.match(form, /Jede Woche/);
+  assert.match(form, /data-slot-preview/);
+  const day = futureDate(3);
+  const r = await owner.req(`/w/${wsId}/slots/series`, { method: 'POST', form: { offering_id: offId, from: day, window_start: '15:00', window_end: '16:00', repeat: 'weekly', weeks: '4' } });
+  assert.match(r.headers.get('location')!, /msg=slots_created&n=8/);
+  // Einmalig: nur der eine Tag.
+  const once = await owner.req(`/w/${wsId}/slots/series`, { method: 'POST', form: { offering_id: offId, from: day, window_start: '17:00', window_end: '17:30', repeat: 'once' } });
+  assert.match(once.headers.get('location')!, /n=1/);
+  // Kalender bietet „Woche wiederholen“ an.
+  assert.match(await (await owner.req(`/w/${wsId}/calendar?week=${day}`)).text(), /Woche übernehmen/);
+
+  // Feste Stunde für eine Schülerin: jede Woche, 4 Termine, nur eine Bestätigungs-Mail.
+  await login(app, mailer, 'fiona@example.com', 'Fiona Fest');
+  const fid = (await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'fiona@example.com'`))!.id;
+  await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES ('m-fiona', ?, ?, 'member', ?)`, [wsId, fid, new Date().toISOString()]);
+  const before = (await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM notifications WHERE recipient_user_id = ?`, [fid]))!.n;
+  const add = await owner.req(`/w/${wsId}/students/${fid}/lessons`, { method: 'POST', form: { offering_id: offId, date: futureDate(4), time: '18:00', duration: '', repeat: 'weekly', count: '4' } });
+  assert.match(add.headers.get('location')!, /msg=lessons_added&n=4&k=0/);
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM bookings WHERE user_id = ? AND status = 'confirmed'`, [fid]))!.n, 4);
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM notifications WHERE recipient_user_id = ?`, [fid]))!.n - before, 1);
+});

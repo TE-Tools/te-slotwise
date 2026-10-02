@@ -36,7 +36,7 @@ import {
   type Totals,
 } from '../services/billing.ts';
 import { getOffering, listOfferings } from '../services/offerings.ts';
-import { durationLabel, formatDate, formatTime, LocalTimeError, localDate, localToUtc } from '../time.ts';
+import { addDays, durationLabel, formatDate, formatTime, LocalTimeError, localDate, localToUtc } from '../time.ts';
 import { MONTHS } from '../views/calendar.ts';
 import { emptyState, errorBox, flash, options, pageHeader, type Frag, type H } from '../views/ui.ts';
 import { back, render } from './common.ts';
@@ -349,7 +349,7 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
     const today = localDate(Date.now(), ws.timezone);
     const defaultDate = p.kind === 'month' && !today.startsWith(p.key) ? `${p.key}-01` : today;
     return page(c, ws, studentName(s), [
-      flash(c.req.query('msg')),
+      flash(c.req.query('msg'), c.req.query('n') ? `(${Number(c.req.query('n'))} eingetragen${Number(c.req.query('k')) ? `, ${Number(c.req.query('k'))} übersprungen – Zeit schon belegt` : ''})` : undefined),
       errorBox(c.req.query('err') === 'time' ? 'Ungültige Zeit: Bitte Datum, Uhrzeit und Dauer prüfen.' : null),
       pageHeader(studentName(s), s.email, html`<a class="btn btn-secondary" href="/w/${ws.id}/students?${p.query}">Alle Schüler:innen</a>
         <a class="btn btn-secondary" href="/w/${ws.id}/bookings?person=${s.user_id}&status=confirmed">Buchungen</a>`),
@@ -378,7 +378,21 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
                   <label>Uhrzeit <input type="time" name="time" required step="300" value="16:00"></label>
                   <label>Dauer (Min., leer = wie Angebot) <input type="number" name="duration" min="5" max="1440" step="5"></label>
                 </div>
-                <label class="check"><input type="checkbox" name="attended" value="1"> Hat schon stattgefunden – gleich als „stattgefunden“ abhaken</label>
+                <div class="grid-form">
+                  <label>Wiederholen <select name="repeat">${options(
+                    [
+                      { value: 'once', label: 'Nur dieser Termin' },
+                      { value: 'weekly', label: 'Jede Woche (feste Stunde)' },
+                      { value: 'biweekly', label: 'Alle 2 Wochen' },
+                    ],
+                    'once',
+                  )}</select></label>
+                  <label>Wie oft insgesamt <select name="count">${options(
+                    [4, 8, 10, 12, 16, 20, 26, 40].map((n) => ({ value: String(n), label: `${n} Termine` })),
+                    '12',
+                  )}</select></label>
+                </div>
+                <label class="check"><input type="checkbox" name="attended" value="1"> Hat schon stattgefunden – vergangene Termine gleich als „stattgefunden“ abhaken</label>
                 <p class="hint">Für Stunden, die außerhalb der App vereinbart wurden, oder um ${studentName(s)} direkt einzuplanen. Der Termin ist sofort fest${s.email ? '; bei künftigen Terminen gibt es eine Bestätigung per E-Mail' : ''}.</p>
                 <button class="btn" type="submit">Termin eintragen</button>
               </form>`
@@ -419,11 +433,41 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
       if (e instanceof LocalTimeError) return c.redirect(`${base}&err=time`, 303);
       throw e;
     }
-    const r = await providerAddBooking(db, config.appUrl, { workspaceId: ws.id, offering: off, userId: s.user_id, actorId: user.id, tz: ws.timezone, startMs, durationMin: duration, note: '' });
+    // Feste Stunde: gleiche Uhrzeit (Ortszeit) jede bzw. jede zweite Woche, belegte Zeiten werden übersprungen.
+    const repeat = str(f, 'repeat');
+    const step = repeat === 'weekly' ? 7 : repeat === 'biweekly' ? 14 : 0;
+    const count = step ? Math.min(52, Math.max(1, Number.parseInt(str(f, 'count', 3), 10) || 12)) : 1;
+    const created: string[] = [];
+    let conflicts = 0;
+    for (let k = 0; k < count; k++) {
+      let start = startMs;
+      if (k) {
+        try {
+          start = localToUtc(addDays(date, step * k), str(f, 'time', 5), ws.timezone);
+        } catch (e) {
+          if (e instanceof LocalTimeError) {
+            conflicts++;
+            continue;
+          }
+          throw e;
+        }
+      }
+      // Bei einer Serie nur eine Bestätigungs-E-Mail (für den ersten künftigen Termin), nicht eine pro Woche.
+      const notify = !created.some((id) => id) && start > Date.now();
+      const r = await providerAddBooking(db, config.appUrl, { workspaceId: ws.id, offering: off, userId: s.user_id, actorId: user.id, tz: ws.timezone, startMs: start, durationMin: duration, note: '', notify });
+      if (r.ok) created.push(r.bookingId);
+      else if (count === 1) {
+        kick();
+        return back(c, base, r.code === 'full' ? 'lesson_full' : 'book_already');
+      } else conflicts++;
+    }
     kick();
-    if (!r.ok) return back(c, base, r.code === 'full' ? 'lesson_full' : 'book_already');
-    if (f.attended && startMs + duration * 60_000 <= Date.now()) await markAttended(db, ws.id, [r.bookingId]);
-    return back(c, base, 'lesson_added');
+    if (f.attended) {
+      const past = (await listLessons(db, ws.id, { ids: created })).filter((l) => Date.parse(l.ends_at) <= Date.now()).map((l) => l.id);
+      if (past.length) await markAttended(db, ws.id, past);
+    }
+    if (count === 1) return back(c, base, 'lesson_added');
+    return c.redirect(`${base}&msg=lessons_added&n=${created.length}&k=${conflicts}`, 303);
   });
 
   // ---------- Speichern (Abhaken, Preise, Zahlungen) ----------

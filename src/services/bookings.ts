@@ -576,7 +576,7 @@ export type AddLessonResult = { ok: true; bookingId: string } | { ok: false; cod
 export async function providerAddBooking(
   db: Db,
   appUrl: string,
-  p: { workspaceId: string; offering: Offering; userId: string; actorId: string; tz: string; startMs: number; durationMin: number; note: string },
+  p: { workspaceId: string; offering: Offering; userId: string; actorId: string; tz: string; startMs: number; durationMin: number; note: string; notify?: boolean },
   now = Date.now(),
 ): Promise<AddLessonResult> {
   const endMs = p.startMs + p.durationMin * 60_000;
@@ -610,7 +610,7 @@ export async function providerAddBooking(
       );
       await logEvent(db, { id, workspace_id: p.workspaceId }, null, 'confirmed', p.actorId, 'Von der Anbieterseite eingetragen');
       // Nur künftige Termine ankündigen; nachgetragene Stunden brauchen keine E-Mail.
-      if (p.startMs > now) await notifyBooker(db, appUrl, (await loadCtx(db, id))!, 'booking_confirmed');
+      if (p.startMs > now && p.notify !== false) await notifyBooker(db, appUrl, (await loadCtx(db, id))!, 'booking_confirmed');
       return { ok: true, bookingId: id };
     });
   } catch (e) {
