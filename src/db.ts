@@ -22,11 +22,12 @@ export interface Db {
 
 /**
  * Wandelt benannte Parameter (@name) in nummerierte (?1, ?2 …) um – D1 kennt nur diese.
- * Das SQL dieser Anwendung enthält "@" ausschließlich als Parameterzeichen.
+ * Text in einfachen Anführungszeichen (z. B. '%@ohne-app.invalid') bleibt unverändert.
  */
 export function toOrdered(sql: string, params: Record<string, Param>): { sql: string; values: Param[] } {
   const names: string[] = [];
-  const out = sql.replace(/@([A-Za-z_]\w*)/g, (_, name: string) => {
+  const out = sql.replace(/'(?:[^']|'')*'|@([A-Za-z_]\w*)/g, (match, name: string | undefined) => {
+    if (name === undefined) return match;
     let i = names.indexOf(name);
     if (i < 0) {
       if (!(name in params)) throw new Error(`SQL-Parameter @${name} fehlt`);
