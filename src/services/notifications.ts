@@ -2,6 +2,7 @@ import type { Db } from '../db.ts';
 import { newId, nowIso } from '../ids.ts';
 import type { Mailer } from '../mail/mailer.ts';
 import { render, type Payload, type Template } from '../mail/templates.ts';
+import { isOfflineEmail } from '../offline.ts';
 import { pushToUser, type PushMessage, type PushSender } from './push.ts';
 
 // Benachrichtigungen laufen über eine Outbox-Tabelle: Fachliche Änderungen (z. B. Buchung)
@@ -16,6 +17,8 @@ export interface Recipient {
 export const MAX_AUTO_ATTEMPTS = 3;
 
 export async function enqueue(db: Db, workspaceId: string | null, to: Recipient, template: Template, payload: Payload) {
+  // Schüler:innen ohne App haben nur eine Platzhalter-Adresse – nichts zu verschicken.
+  if (isOfflineEmail(to.email)) return;
   const now = nowIso();
   // Push zusätzlich zur E-Mail, wenn die Person auf einem Gerät Push eingeschaltet hat.
   // Wer Push hat und E-Mails abbestellt hat, bekommt nur Push.

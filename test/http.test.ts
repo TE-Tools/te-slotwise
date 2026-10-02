@@ -684,3 +684,58 @@ test('Kalender: Tag-, Wochen- und Monatsansicht', async () => {
   assert.match(await (await owner.req(`/w/${wsId}/calendar?week=${day}`)).text(), /Woche wiederholen/);
   assert.doesNotMatch(month, /Woche wiederholen/);
 });
+
+test('Schüler:in ohne App: nur Name und Instrument, feste Stunden sofort bestätigt, keine E-Mails, später übernehmbar', async () => {
+  const { app, mailer, db } = await setup();
+  const owner = await login(app, mailer, 'ohneapp@example.com', 'Olga Orgel');
+  const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Orgel', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
+  const offId = /offerings\/([^?]+)/.exec((await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Orgelstunde', duration_min: '45', confirmation_mode: 'manual', visibility: 'internal' } })).headers.get('location')!)![1];
+  assert.match(await (await owner.req(`/w/${wsId}/students`)).text(), /Schüler:in ohne App eintragen/);
+
+  // Ohne Vorname geht es nicht.
+  assert.match((await owner.req(`/w/${wsId}/students/new`, { method: 'POST', form: { first_name: '', last_name: 'X' } })).headers.get('location')!, /name_required/);
+  const r = await owner.req(`/w/${wsId}/students/new`, { method: 'POST', form: { first_name: 'Paul', last_name: 'Pfeife', new_group: 'Orgel' } });
+  assert.equal(r.status, 303);
+  const pid = /students\/([^?]+)\?msg=student_created/.exec(r.headers.get('location')!)![1];
+  const sent = mailer.sent.length;
+  const notes = (await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM notifications`))!.n;
+
+  // Instrument als Gruppe angelegt und zugeordnet; zweite Person mit derselben Gruppe legt keine neue an.
+  await owner.req(`/w/${wsId}/students/new`, { method: 'POST', form: { first_name: 'Pia', last_name: 'Pfeife', new_group: 'orgel' } });
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ws_groups WHERE workspace_id = ?`, [wsId]))!.n, 1);
+
+  // Feste wöchentliche Stunde: sofort bestätigt, keine Benachrichtigung.
+  const add = await owner.req(`/w/${wsId}/students/${pid}/lessons`, { method: 'POST', form: { offering_id: offId, date: futureDate(3), time: '17:00', duration: '', repeat: 'weekly', count: '4' } });
+  assert.match(add.headers.get('location')!, /n=4&k=0/);
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM bookings WHERE user_id = ? AND status = 'confirmed'`, [pid]))!.n, 4);
+  assert.equal((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM notifications`))!.n, notes);
+  assert.equal(mailer.sent.length, sent);
+
+  // Übersicht, Detailseite, Kalender: Name und Instrument, keine Platzhalter-Adresse.
+  const overview = await (await owner.req(`/w/${wsId}/students`)).text();
+  assert.match(overview, /Paul Pfeife<\/strong><\/a> <span class="badge badge-muted"[^>]*>ohne App/);
+  assert.match(overview, /badge-group">Orgel/);
+  assert.doesNotMatch(overview, /ohne-app\.invalid/);
+  const detail = await (await owner.req(`/w/${wsId}/students/${pid}`)).text();
+  assert.match(detail, /Name &amp; E-Mail/);
+  assert.doesNotMatch(detail, /ohne-app\.invalid/);
+  assert.doesNotMatch(await (await owner.req(`/w/${wsId}/bookings`)).text(), /ohne-app\.invalid/);
+  assert.doesNotMatch(await (await owner.req(`/w/${wsId}/members`)).text(), /ohne-app\.invalid/);
+  assert.match(await (await owner.req('/calendar.ics')).text(), /SUMMARY:Paul Pfeife · Orgelstunde – Orgel/);
+  assert.match(await (await owner.req(`/w/${wsId}/students/list.csv`)).text(), /Paul Pfeife;;Orgel/);
+
+  // Platzhalter-Adressen lassen sich weder registrieren noch anmelden.
+  const placeholder = (await db.get<{ email: string }>(`SELECT email FROM users WHERE id = ?`, [pid]))!.email;
+  const anon = client(app);
+  await anon.req('/register', { method: 'POST', form: { first_name: 'X', last_name: 'Y', email: placeholder, password: 'egal-passwort-1', password2: 'egal-passwort-1' } });
+  assert.equal((await db.get<{ h: string | null }>(`SELECT password_hash AS h FROM users WHERE id = ?`, [pid]))!.h, null);
+
+  // E-Mail nachtragen: vergebene Adresse wird abgelehnt, freie übernommen; Registrierung übernimmt das Konto.
+  assert.match((await owner.req(`/w/${wsId}/students/${pid}/offline`, { method: 'POST', form: { first_name: 'Paul', last_name: 'Pfeife', email: 'ohneapp@example.com' } })).headers.get('location')!, /email_taken/);
+  assert.match((await owner.req(`/w/${wsId}/students/${pid}/offline`, { method: 'POST', form: { first_name: 'Paul', last_name: 'Pfeife', email: 'paul@example.com' } })).headers.get('location')!, /msg=saved/);
+  const paul = await login(app, mailer, 'paul@example.com', 'Paul Pfeife', 'paul-passwort-1', false);
+  assert.equal((await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'paul@example.com'`))!.id, pid);
+  assert.match(await (await paul.req('/bookings')).text(), /Orgelstunde/);
+  // Danach ist es ein normales Konto – nicht mehr als „ohne App“ änderbar.
+  assert.equal((await owner.req(`/w/${wsId}/students/${pid}/offline`, { method: 'POST', form: { first_name: 'X', email: '' } })).status, 404);
+});

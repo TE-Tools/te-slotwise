@@ -44,7 +44,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export function normalizeEmail(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const email = raw.trim().toLowerCase();
-  if (email.length > 254 || !EMAIL_RE.test(email)) return null;
+  // .invalid ist reserviert (RFC 6761) – darunter liegen u. a. die Platzhalter für Schüler:innen ohne App.
+  if (email.length > 254 || !EMAIL_RE.test(email) || email.endsWith('.invalid')) return null;
   return email;
 }
 

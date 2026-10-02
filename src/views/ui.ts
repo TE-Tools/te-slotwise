@@ -73,6 +73,9 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   money_invalid: { text: 'Ungültiger Betrag – bitte z. B. 25 oder 25,50 eingeben. Nichts wurde gespeichert.', kind: 'error' },
   lessons_saved: { text: 'Gespeichert.', kind: 'ok' },
   lesson_added: { text: 'Termin eingetragen.', kind: 'ok' },
+  student_created: { text: 'Schüler:in angelegt. Trage jetzt die feste Stunde ein – sie zählt sofort als bestätigt.', kind: 'ok' },
+  email_taken: { text: 'Mit dieser E-Mail gibt es schon ein Konto. Lade die Person stattdessen unter „Mitglieder“ ein.', kind: 'error' },
+  email_invalid: { text: 'Bitte eine gültige E-Mail-Adresse eingeben.', kind: 'error' },
   lesson_full: { text: 'Zu dieser Zeit gibt es schon einen festen Termin dieses Angebots. Bitte eine andere Zeit wählen.', kind: 'error' },
 };
 

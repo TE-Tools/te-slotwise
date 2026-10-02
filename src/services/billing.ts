@@ -125,7 +125,12 @@ export function periodRangeIso(p: Pick<Period, 'from' | 'to'>, tz: string): [str
 export interface StudentRow {
   user_id: string;
   display_name: string;
+  /** leer bei Schüler:innen ohne App */
   email: string;
+  /** 1 = ohne App angelegt (nur Name, keine E-Mail) */
+  offline: number;
+  first_name: string;
+  last_name: string;
   role: string | null;
   /** individueller Preis (Cent) oder null */
   own_price_cents: number | null;
@@ -147,7 +152,8 @@ export interface StudentRow {
  */
 export async function listStudents(db: Db, wsId: string) {
   return await db.all<StudentRow>(
-    `SELECT u.id AS user_id, u.display_name, u.email, m.role, sr.price_cents AS own_price_cents, m.id AS membership_id,
+    `SELECT u.id AS user_id, u.display_name, CASE WHEN u.email LIKE '%@ohne-app.invalid' THEN '' ELSE u.email END AS email,
+       (u.email LIKE '%@ohne-app.invalid') AS offline, u.first_name, u.last_name, m.role, sr.price_cents AS own_price_cents, m.id AS membership_id,
        (SELECT GROUP_CONCAT(name, ', ') FROM (SELECT g.name FROM group_members gm JOIN ws_groups g ON g.id = gm.group_id WHERE gm.membership_id = m.id ORDER BY g.name COLLATE NOCASE)) AS group_names,
        u.address_street, u.address_zip, u.address_city, u.birth_date, u.phone, u.billing_name
      FROM users u
@@ -156,7 +162,7 @@ export async function listStudents(db: Db, wsId: string) {
      WHERE u.id IN (
        SELECT user_id FROM memberships WHERE workspace_id = @ws AND role = 'member'
        UNION SELECT user_id FROM bookings WHERE workspace_id = @ws AND (status = 'confirmed' OR attendance IS NOT NULL OR paid_cents > 0))
-     ORDER BY u.display_name COLLATE NOCASE, u.email`,
+     ORDER BY u.display_name COLLATE NOCASE, u.id`,
     { ws: wsId },
   );
 }
@@ -218,7 +224,7 @@ export async function listLessons(db: Db, wsId: string, f: { fromIso?: string; t
     where.push(`b.id IN (${names.join(', ')})`);
   }
   const rows = await db.all<Omit<LessonRow, 'rate_cents' | 'minutes'> & { own_rate: number | null; default_rate: number | null; price_unit: PriceUnit }>(
-    `SELECT b.id, b.user_id, u.display_name AS student_name, u.email AS student_email, o.name AS offering_name, b.status,
+    `SELECT b.id, b.user_id, u.display_name AS student_name, CASE WHEN u.email LIKE '%@ohne-app.invalid' THEN '' ELSE u.email END AS student_email, o.name AS offering_name, b.status,
        b.starts_at, b.ends_at, s.timezone, b.attendance, b.price_cents, b.paid_cents, b.paid_at,
        sr.price_cents AS own_rate, w.default_price_cents AS default_rate, w.price_unit,
        (SELECT g.name FROM ws_groups g WHERE g.id = b.group_id) AS group_name
