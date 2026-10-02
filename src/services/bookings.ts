@@ -116,7 +116,7 @@ const isFull = (e: unknown) => e instanceof Error && /slot_full/.test(e.message)
 export async function requestBooking(
   db: Db,
   appUrl: string,
-  p: { workspaceId: string; slotId: string; userId: string; membershipId: string | null; note: string; time?: string },
+  p: { workspaceId: string; slotId: string; userId: string; membershipId: string | null; note: string; time?: string; groupId?: string | null },
   now = Date.now(),
 ): Promise<BookResult> {
   try {
@@ -160,6 +160,7 @@ export async function requestBooking(
       const mine = await db.get(`SELECT id FROM bookings WHERE slot_id = ? AND user_id = ? AND status IN ('requested','confirmed')`, [slot.id, p.userId]);
       if (mine) return { ok: false, code: 'already_booked' };
 
+      const groupId = await resolveGroup(db, p.workspaceId, p.membershipId, p.groupId);
       const status = slot.mode === 'auto' ? 'confirmed' : 'requested';
       const holds = status === 'confirmed' || slot.hold_on_request ? 1 : 0;
       // Feste Slots: nur solange Platz frei ist. Zeitfenster: Überschneidungen prüft der Trigger,
@@ -169,9 +170,9 @@ export async function requestBooking(
       const id = newId();
       const ts = nowIso(now);
       await db.run(
-        `INSERT INTO bookings (id, workspace_id, slot_id, offering_id, user_id, status, starts_at, ends_at, holds_seat, note, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, p.workspaceId, slot.id, slot.offering_id, p.userId, status, nowIso(start), nowIso(end), holds, p.note.slice(0, 1000), ts, ts],
+        `INSERT INTO bookings (id, workspace_id, slot_id, offering_id, user_id, status, starts_at, ends_at, holds_seat, note, group_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, p.workspaceId, slot.id, slot.offering_id, p.userId, status, nowIso(start), nowIso(end), holds, p.note.slice(0, 1000), groupId, ts, ts],
       );
       await logEvent(db, { id, workspace_id: p.workspaceId }, null, status, p.userId);
       const ctx = (await loadCtx(db, id))!;
@@ -184,6 +185,20 @@ export async function requestBooking(
     if (isFull(e)) return { ok: false, code: 'full' };
     throw e;
   }
+}
+
+/**
+ * Gruppe (z. B. Instrument) einer Buchung: die gewählte, sofern die Person ihr angehört; ohne Wahl
+ * automatisch die einzige Gruppe der Person; sonst keine.
+ */
+export async function resolveGroup(db: Db, wsId: string, membershipId: string | null, wanted?: string | null) {
+  if (!membershipId) return null;
+  const groups = await db.all<{ id: string }>(
+    `SELECT g.id FROM ws_groups g JOIN group_members gm ON gm.group_id = g.id AND gm.workspace_id = g.workspace_id WHERE g.workspace_id = ? AND gm.membership_id = ?`,
+    [wsId, membershipId],
+  );
+  if (wanted && groups.some((g) => g.id === wanted)) return wanted;
+  return groups.length === 1 ? groups[0].id : null;
 }
 
 export type ActionResult = 'ok' | 'not_found' | 'invalid_state' | 'full' | 'bad_time';
@@ -448,6 +463,7 @@ export interface MyBookingRow extends BookingTimes {
   allow_self_cancel: number;
   cancel_cutoff_hours: number;
   created_at: string;
+  group_name: string | null;
 }
 
 export async function listMyBookings(db: Db, userId: string) {
@@ -455,7 +471,8 @@ export async function listMyBookings(db: Db, userId: string) {
     `SELECT b.id, b.status, b.cancel_requested_at, b.starts_at, b.ends_at, s.timezone,
        b.proposed_starts_at, b.proposed_ends_at, b.proposed_by, b.proposal_note, b.slot_id, b.offering_id,
        COALESCE(s.location, o.location) AS location, COALESCE(s.online_info, o.online_info) AS online_info,
-       o.name AS offering_name, w.name AS workspace_name, w.id AS workspace_id, o.allow_self_cancel, o.cancel_cutoff_hours, b.created_at
+       o.name AS offering_name, w.name AS workspace_name, w.id AS workspace_id, o.allow_self_cancel, o.cancel_cutoff_hours, b.created_at,
+       (SELECT g.name FROM ws_groups g WHERE g.id = b.group_id) AS group_name
      FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN offerings o ON o.id = b.offering_id JOIN workspaces w ON w.id = b.workspace_id
      WHERE b.user_id = ? ORDER BY b.starts_at DESC LIMIT 500`,
     [userId],
@@ -476,6 +493,8 @@ export interface WsBookingRow extends BookingTimes {
   is_member: number;
   conflicts: number;
   attendance: 'attended' | 'absent_billed' | 'absent' | null;
+  /** gewählte Gruppe (z. B. Instrument) */
+  group_name: string | null;
 }
 
 export interface BookingFilter {
@@ -530,6 +549,7 @@ export async function listWorkspaceBookings(db: Db, wsId: string, f: BookingFilt
   }
   return await db.all<WsBookingRow>(
     `SELECT b.id, b.status, b.note, b.cancel_requested_at, b.created_at, b.starts_at, b.ends_at, s.timezone, b.attendance,
+       (SELECT g.name FROM ws_groups g WHERE g.id = b.group_id) AS group_name,
        b.proposed_starts_at, b.proposed_ends_at, b.proposed_by, b.proposal_note, b.slot_id, b.offering_id,
        o.name AS offering_name, s.id AS slot_id, s.kind AS slot_kind,
        u.display_name AS booker_name, u.email AS booker_email, u.id AS user_id,
@@ -576,7 +596,7 @@ export type AddLessonResult = { ok: true; bookingId: string } | { ok: false; cod
 export async function providerAddBooking(
   db: Db,
   appUrl: string,
-  p: { workspaceId: string; offering: Offering; userId: string; actorId: string; tz: string; startMs: number; durationMin: number; note: string; notify?: boolean },
+  p: { workspaceId: string; offering: Offering; userId: string; actorId: string; tz: string; startMs: number; durationMin: number; note: string; notify?: boolean; groupId?: string | null },
   now = Date.now(),
 ): Promise<AddLessonResult> {
   const endMs = p.startMs + p.durationMin * 60_000;
@@ -603,10 +623,12 @@ export async function providerAddBooking(
         }));
       const id = newId();
       const ts = nowIso(now);
+      const membership = await db.get<{ id: string }>(`SELECT id FROM memberships WHERE workspace_id = ? AND user_id = ?`, [p.workspaceId, p.userId]);
+      const groupId = await resolveGroup(db, p.workspaceId, membership?.id ?? null, p.groupId);
       await db.run(
-        `INSERT INTO bookings (id, workspace_id, slot_id, offering_id, user_id, status, starts_at, ends_at, holds_seat, note, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, 1, ?, ?, ?)`,
-        [id, p.workspaceId, slotId, p.offering.id, p.userId, nowIso(p.startMs), nowIso(endMs), p.note.slice(0, 1000), ts, ts],
+        `INSERT INTO bookings (id, workspace_id, slot_id, offering_id, user_id, status, starts_at, ends_at, holds_seat, note, group_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, 1, ?, ?, ?, ?)`,
+        [id, p.workspaceId, slotId, p.offering.id, p.userId, nowIso(p.startMs), nowIso(endMs), p.note.slice(0, 1000), groupId, ts, ts],
       );
       await logEvent(db, { id, workspace_id: p.workspaceId }, null, 'confirmed', p.actorId, 'Von der Anbieterseite eingetragen');
       // Nur künftige Termine ankündigen; nachgetragene Stunden brauchen keine E-Mail.

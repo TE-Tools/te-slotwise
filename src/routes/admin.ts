@@ -596,7 +596,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         start: Date.parse(b.starts_at),
         end: Date.parse(b.ends_at),
         title: b.booker_name || 'Ohne Namen',
-        detail: `${check}${b.offering_name}${b.status === 'requested' ? ' · angefragt' : ''}${b.proposed_by ? ' · Änderung offen' : ''}`,
+        detail: `${check}${b.group_name ? `${b.group_name} · ` : ''}${b.offering_name}${b.status === 'requested' ? ' · angefragt' : ''}${b.proposed_by ? ' · Änderung offen' : ''}`,
         href,
         kind: b.status === 'confirmed' ? 'confirmed' : 'requested',
         mark: done ? (b.attendance ? 'checked' : 'todo') : undefined,
@@ -1158,7 +1158,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
           <div><strong>${b.booker_name || 'Ohne Namen'}</strong> <span class="muted">${b.booker_email}</span> ${b.is_member ? '' : html`<span class="badge badge-muted">extern</span>`}</div>
           <div>${bookingBadge(b.status, past)} ${active ? awaitingLabel(b, 'provider') : ''}</div>
         </div>
-        <p>${when(b.starts_at, b.ends_at, b.timezone)} · ${b.offering_name}${b.slot_kind === 'window' ? html` <span class="badge badge-window">Wunschzeit</span>` : ''}</p>
+        <p>${when(b.starts_at, b.ends_at, b.timezone)} · ${b.offering_name}${b.group_name ? html` <span class="badge badge-group">${b.group_name}</span>` : ''}${b.slot_kind === 'window' ? html` <span class="badge badge-window">Wunschzeit</span>` : ''}</p>
         ${b.conflicts && active ? html`<p class="flash flash-warn">Überschneidet sich mit ${b.conflicts} anderen offenen oder festen Termin(en) in diesem Arbeitsbereich.</p>` : ''}
         ${b.note ? html`<p class="muted">Nachricht: ${b.note}</p>` : ''}
         ${past && b.status === 'confirmed' && can(ws.role, 'billing.manage')

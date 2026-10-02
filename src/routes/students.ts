@@ -36,6 +36,9 @@ import {
   type Totals,
 } from '../services/billing.ts';
 import { getOffering, listOfferings } from '../services/offerings.ts';
+import { readContact, updateContact } from '../services/auth.ts';
+import { addToGroup, listGroups, myGroups } from '../services/workspaces.ts';
+import { contactFields } from '../views/contact.ts';
 import { addDays, durationLabel, formatDate, formatTime, LocalTimeError, localDate, localToUtc } from '../time.ts';
 import { MONTHS } from '../views/calendar.ts';
 import { emptyState, errorBox, flash, options, pageHeader, type Frag, type H } from '../views/ui.ts';
@@ -132,7 +135,7 @@ function lessonForm(ws: WsContext, lessons: LessonRow[], backPath: string, showS
             <strong>${formatDate(start, l.timezone)}</strong><br><span class="muted">${formatTime(start, l.timezone)} Uhr · ${durationLabel(l.minutes)}</span>
             ${l.status !== 'confirmed' ? html`<br><span class="badge badge-cancelled">abgesagt</span>` : !past ? html`<br><span class="badge badge-muted">geplant</span>` : ''}</td>
           ${showStudent ? html`<td><a href="/w/${ws.id}/students/${l.user_id}?month=${localDate(start, ws.timezone).slice(0, 7)}">${l.student_name || l.student_email}</a></td>` : ''}
-          <td>${l.offering_name}</td>
+          <td>${l.offering_name}${l.group_name ? html`<br><span class="badge badge-muted">${l.group_name}</span>` : ''}</td>
           <td><label class="sr-only" for="att-${l.id}">Anwesenheit</label>
             <select id="att-${l.id}" name="att_${l.id}" class="att-${l.attendance ?? 'none'}">
               <option value="">${past ? '– offen –' : '– geplant –'}</option>
@@ -167,7 +170,7 @@ function studentTable(ws: WsContext, students: StudentRow[], totals: Map<string,
     </tr></thead>
     <tbody>${rows.map(
       ({ s, t }) => html`<tr class="${t.lessons ? '' : 'row-empty'}">
-        <td><a href="/w/${ws.id}/students/${s.user_id}?${p.query}"><strong>${studentName(s)}</strong></a>${s.role ? '' : html` <span class="badge badge-muted">extern</span>`}</td>
+        <td><a href="/w/${ws.id}/students/${s.user_id}?${p.query}"><strong>${studentName(s)}</strong></a>${s.role ? '' : html` <span class="badge badge-muted">extern</span>`}${s.group_names ? html`<br>${s.group_names.split(', ').map((g) => html`<span class="badge badge-group">${g}</span> `)}` : ''}</td>
         <td>${s.own_price_cents !== null ? html`<span class="num">${formatMoney(s.own_price_cents)}</span> <span class="badge badge-muted">individuell</span>` : html`<span class="muted">${defaultPrice}</span>`}</td>
         <td class="num">${t.lessons || '–'}${t.planned ? html` <span class="muted">(${t.planned} geplant)</span>` : ''}</td>
         <td class="num">${t.attended ? html`${t.attended} <span class="muted">· ${formatHours(t.attendedMinutes)}</span>` : '–'}</td>
@@ -258,7 +261,7 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
         ? html`<div class="flash flash-info">Noch kein Preis festgelegt. Trage unten einen Standardpreis ein – individuelle Preise setzt du auf der Seite der jeweiligen Person.</div>`
         : '',
       html`<section class="card">
-        ${periodNav(`/w/${ws.id}/students`, p, html`<a class="btn btn-secondary btn-small" href="/w/${ws.id}/students/export.csv?${p.query}" download>Als CSV herunterladen</a>`)}
+        ${periodNav(`/w/${ws.id}/students`, p, html`<a class="btn btn-secondary btn-small" href="/w/${ws.id}/students/export.csv?${p.query}" download>Abrechnung als CSV</a> <a class="btn btn-secondary btn-small" href="/w/${ws.id}/students/list.csv" download>Schülerliste (CSV)</a>`)}
         ${statCards(all)}
         ${students.length
           ? studentTable(ws, students, totals, p, priceLabel(ws))
@@ -298,6 +301,21 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
     ]);
   });
 
+  // ---------- Schülerliste mit Kontaktdaten ----------
+
+  app.get('/w/:wid/students/list.csv', async (c) => {
+    const { ws } = await requireWs(c, 'billing.manage');
+    const students = await listStudents(c.get('deps').db, ws.id);
+    const rows: (string | number)[][] = [['Vorname Nachname', 'E-Mail', 'Gruppen', 'Straße', 'PLZ', 'Ort', 'Geburtstag', 'Telefon', 'Rechnung an', 'Preis (EUR)']];
+    for (const s of students) {
+      rows.push([s.display_name, s.email, s.group_names ?? '', s.address_street, s.address_zip, s.address_city, s.birth_date ?? '', s.phone, s.billing_name, centsCsv(s.own_price_cents)]);
+    }
+    c.header('Content-Type', 'text/csv; charset=utf-8');
+    c.header('Content-Disposition', 'attachment; filename="schuelerliste.csv"');
+    c.header('Cache-Control', 'no-store');
+    return c.body(toCsv(rows));
+  });
+
   // ---------- CSV-Export ----------
 
   app.get('/w/:wid/students/export.csv', async (c) => {
@@ -307,7 +325,7 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
     const userId = c.req.query('user') || undefined;
     const lessons = await listLessons(c.get('deps').db, ws.id, { fromIso, toIso, userId });
     const rows: (string | number)[][] = [
-      ['Datum', 'Beginn', 'Ende', 'Dauer (Min.)', 'Schüler:in', 'E-Mail', 'Angebot', 'Termin', 'Anwesenheit', 'Preis (EUR)', 'Berechnet (EUR)', 'Bezahlt (EUR)', 'Bezahlt am'],
+      ['Datum', 'Beginn', 'Ende', 'Dauer (Min.)', 'Schüler:in', 'E-Mail', 'Angebot', 'Gruppe', 'Termin', 'Anwesenheit', 'Preis (EUR)', 'Berechnet (EUR)', 'Bezahlt (EUR)', 'Bezahlt am'],
     ];
     for (const l of lessons) {
       const s = Date.parse(l.starts_at);
@@ -319,6 +337,7 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
         l.student_name,
         l.student_email,
         l.offering_name,
+        l.group_name ?? '',
         l.status === 'confirmed' ? (Date.parse(l.ends_at) > Date.now() ? 'geplant' : 'fest') : 'abgesagt',
         l.attendance ? ATTENDANCE_LABELS[l.attendance] : 'nicht abgehakt',
         centsCsv(shownPrice(l)),
@@ -346,6 +365,9 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
     const t = totalsBy(lessons, () => 'x').get('x') ?? emptyTotals();
     const offerings = await listOfferings(db, ws.id);
     const base = `/w/${ws.id}/students/${s.user_id}`;
+    const groups = await listGroups(db, ws.id);
+    const memberGroups = s.membership_id ? await myGroups(db, ws.id, s.membership_id) : [];
+    const memberGroupIds = new Set(memberGroups.map((g) => g.id));
     const today = localDate(Date.now(), ws.timezone);
     const defaultDate = p.kind === 'month' && !today.startsWith(p.key) ? `${p.key}-01` : today;
     return page(c, ws, studentName(s), [
@@ -362,6 +384,26 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
       </section>`,
       p.kind === 'year' ? html`<section class="card"><h2>Nach Monaten</h2>${monthTable(ws, p.key, lessons, base)}</section>` : '',
       html`<div class="two-col">
+        <section class="card" id="gruppen"><h2>Gruppen</h2>
+          ${s.membership_id
+            ? groups.length
+              ? html`<form method="post" action="${base}/groups" class="stack">
+                  <p class="hint">Zum Beispiel Instrumente oder Kurse. Ist ${studentName(s)} in mehreren Gruppen, wählt ${studentName(s)} beim Buchen, wofür der Termin ist.</p>
+                  ${groups.map((g) => html`<label class="check"><input type="checkbox" name="groups" value="${g.id}" ${memberGroupIds.has(g.id) ? raw('checked') : ''}> ${g.name}</label>`)}
+                  <button class="btn btn-secondary" type="submit">Gruppen speichern</button>
+                </form>`
+              : html`<p class="muted">Noch keine Gruppen angelegt. <a href="/w/${ws.id}/groups">Gruppen anlegen</a> – z. B. eine pro Instrument.</p>`
+            : html`<p class="muted">${studentName(s)} hat nur über die öffentliche Seite gebucht und ist kein Mitglied. Lade ${studentName(s)} unter <a href="/w/${ws.id}/members">Mitglieder</a> ein, um Gruppen zuzuordnen.</p>`}
+        </section>
+        <section class="card" id="kontakt"><h2>Anschrift &amp; Geburtstag</h2>
+          <form method="post" action="${base}/contact" class="stack">
+            ${contactFields(s)}
+            <p class="hint">Für Rechnungen. ${studentName(s)} kann diese Angaben auch selbst im eigenen Profil pflegen – es sind dieselben Daten.</p>
+            <button class="btn btn-secondary" type="submit">Speichern</button>
+          </form>
+        </section>
+      </div>`,
+      html`<div class="two-col">
         <section class="card"><h2>Preis</h2>
           <form method="post" action="${base}/rate" class="stack">
             <div class="field"><label for="own_price">Individueller Preis (€, ${ws.price_unit === 'hour' ? 'pro 60 Minuten' : 'pro Termin'})</label>
@@ -374,6 +416,9 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
             ? html`<form method="post" action="${base}/lessons" class="stack">
                 <div class="grid-form">
                   <label class="span-all">Angebot <select name="offering_id">${options(offerings.map((o) => ({ value: o.id, label: `${o.name} (${durationLabel(o.duration_min)})` })), offerings[0].id)}</select></label>
+                  ${memberGroups.length > 1
+                    ? html`<label class="span-all">Wofür? <select name="group_id">${options(memberGroups.map((g) => ({ value: g.id, label: g.name })), memberGroups[0].id)}</select></label>`
+                    : ''}
                   <label>Datum <input type="date" name="date" required value="${defaultDate}"></label>
                   <label>Uhrzeit <input type="time" name="time" required step="300" value="16:00"></label>
                   <label>Dauer (Min., leer = wie Angebot) <input type="number" name="duration" min="5" max="1440" step="5"></label>
@@ -454,7 +499,7 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
       }
       // Bei einer Serie nur eine Bestätigungs-E-Mail (für den ersten künftigen Termin), nicht eine pro Woche.
       const notify = !created.some((id) => id) && start > Date.now();
-      const r = await providerAddBooking(db, config.appUrl, { workspaceId: ws.id, offering: off, userId: s.user_id, actorId: user.id, tz: ws.timezone, startMs: start, durationMin: duration, note: '', notify });
+      const r = await providerAddBooking(db, config.appUrl, { workspaceId: ws.id, offering: off, userId: s.user_id, actorId: user.id, tz: ws.timezone, startMs: start, durationMin: duration, note: '', notify, groupId: str(f, 'group_id', 50) || null });
       if (r.ok) created.push(r.bookingId);
       else if (count === 1) {
         kick();
@@ -468,6 +513,33 @@ export function registerStudentRoutes(app: Hono<AppEnv>) {
     }
     if (count === 1) return back(c, base, 'lesson_added');
     return c.redirect(`${base}&msg=lessons_added&n=${created.length}&k=${conflicts}`, 303);
+  });
+
+  app.post('/w/:wid/students/:uid/groups', async (c) => {
+    const { ws } = await requireWs(c, 'billing.manage');
+    const { db } = c.get('deps');
+    const s = await getStudent(db, ws.id, c.req.param('uid'));
+    if (!s || !s.membership_id) notFound();
+    const f = await readForm(c);
+    const valid = new Set((await listGroups(db, ws.id)).map((g) => g.id));
+    const wanted = new Set(list(f, 'groups').filter((id) => valid.has(id)));
+    await db.tx(async () => {
+      await db.run(`DELETE FROM group_members WHERE workspace_id = ? AND membership_id = ?`, [ws.id, s.membership_id]);
+      for (const gid of wanted) await addToGroup(db, ws.id, gid, s.membership_id!);
+    });
+    return back(c, `/w/${ws.id}/students/${s.user_id}`, 'saved');
+  });
+
+  app.post('/w/:wid/students/:uid/contact', async (c) => {
+    const { ws } = await requireWs(c, 'billing.manage');
+    const { db } = c.get('deps');
+    const s = await getStudent(db, ws.id, c.req.param('uid'));
+    if (!s) notFound();
+    const f = await readForm(c);
+    const contact = readContact((k, max) => str(f, k, max));
+    if (contact === 'bad_birth_date') return back(c, `/w/${ws.id}/students/${s.user_id}`, 'bad_birth_date');
+    await updateContact(db, s.user_id, contact);
+    return back(c, `/w/${ws.id}/students/${s.user_id}`, 'saved');
   });
 
   // ---------- Speichern (Abhaken, Preise, Zahlungen) ----------

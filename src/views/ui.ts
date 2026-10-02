@@ -63,6 +63,7 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   lessons_added: { text: 'Feste Termine eingetragen.', kind: 'ok' },
   windows_created: { text: 'Freie Zeitfenster angelegt. Schüler:innen wählen darin ihre Startzeit.', kind: 'ok' },
   slots_deleted: { text: 'Gelöscht.', kind: 'ok' },
+  bad_birth_date: { text: 'Ungültiger Geburtstag – bitte ein Datum in der Vergangenheit wählen.', kind: 'error' },
   week_repeated: { text: 'Woche übernommen.', kind: 'ok' },
   week_empty: { text: 'In dieser Woche gibt es keine Slots zum Übernehmen.', kind: 'info' },
   week_too_many: { text: 'Das wären zu viele Slots auf einmal (höchstens 500). Bitte weniger Wochen wählen.', kind: 'error' },

@@ -12,6 +12,13 @@ export interface User {
   email_verified_at: string | null;
   notify_booking_updates: number;
   notify_new_requests: number;
+  /** Anschrift, Geburtstag, Telefon, Rechnungsempfänger – für Rechnungen */
+  address_street: string;
+  address_zip: string;
+  address_city: string;
+  birth_date: string | null;
+  phone: string;
+  billing_name: string;
   /** student = bucht nur; teacher = darf Arbeitsbereiche anlegen und sieht die Verwaltung */
   account_type: AccountType;
   /** 0 = keine E-Mails, solange Push auf einem Gerät aktiv ist */
@@ -205,6 +212,41 @@ export async function setAccountType(db: Db, userId: string, type: AccountType):
   return 'ok';
 }
 
+export interface ContactInput {
+  street: string;
+  zip: string;
+  city: string;
+  birthDate: string | null;
+  phone: string;
+  billingName: string;
+}
+
+/** Liest Kontaktdaten aus einem Formular (Felder street, zip, city, birth_date, phone, billing_name). */
+export function readContact(get: (key: string, max: number) => string): ContactInput | 'bad_birth_date' {
+  const birth = get('birth_date', 10);
+  if (birth && (!/^\d{4}-\d{2}-\d{2}$/.test(birth) || Number.isNaN(Date.parse(birth)) || birth > new Date().toISOString().slice(0, 10) || birth < '1900-01-01')) return 'bad_birth_date';
+  return {
+    street: get('street', 200),
+    zip: get('zip', 20),
+    city: get('city', 120),
+    birthDate: birth || null,
+    phone: get('phone', 40),
+    billingName: get('billing_name', 160),
+  };
+}
+
+export async function updateContact(db: Db, userId: string, c: ContactInput) {
+  await db.run(`UPDATE users SET address_street = ?, address_zip = ?, address_city = ?, birth_date = ?, phone = ?, billing_name = ? WHERE id = ?`, [
+    c.street,
+    c.zip,
+    c.city,
+    c.birthDate,
+    c.phone,
+    c.billingName,
+    userId,
+  ]);
+}
+
 // ---------- Zugänge für andere Apps (Familienplaner usw.) ----------
 
 export const API_TOKEN_TTL_MS = 180 * 24 * 3600_000;
@@ -301,7 +343,7 @@ export async function updateProfile(db: Db, userId: string, p: { firstName: stri
 }
 
 export async function exportUserData(db: Db, userId: string) {
-  const user = await db.get(`SELECT id, email, first_name, last_name, display_name, email_verified_at, notify_booking_updates, notify_new_requests, notify_email, created_at FROM users WHERE id = ?`, [userId]);
+  const user = await db.get(`SELECT id, email, first_name, last_name, display_name, address_street, address_zip, address_city, birth_date, phone, billing_name, email_verified_at, notify_booking_updates, notify_new_requests, notify_email, created_at FROM users WHERE id = ?`, [userId]);
   const memberships = await db.all(
     `SELECT w.name AS workspace, m.role, m.created_at FROM memberships m JOIN workspaces w ON w.id = m.workspace_id WHERE m.user_id = ?`,
     [userId],
@@ -354,7 +396,8 @@ export async function deleteAccount(db: Db, userId: string): Promise<{ ok: true 
     await db.run(`UPDATE notifications SET recipient_email = '', payload = '{}' WHERE recipient_user_id = ?`, [userId]);
     // Vergangene Buchungen bleiben für die Anbieter erhalten, aber ohne personenbezogene Daten.
     await db.run(
-      `UPDATE users SET email = ?, display_name = 'Gelöschtes Konto', first_name = 'Gelöschtes', last_name = 'Konto', password_hash = NULL, calendar_token = NULL, deleted_at = ? WHERE id = ?`,
+      `UPDATE users SET email = ?, display_name = 'Gelöschtes Konto', first_name = 'Gelöschtes', last_name = 'Konto', password_hash = NULL, calendar_token = NULL,
+         address_street = '', address_zip = '', address_city = '', birth_date = NULL, phone = '', billing_name = '', deleted_at = ? WHERE id = ?`,
       [`deleted-${userId}@invalid`, now, userId],
     );
     return { ok: true as const };

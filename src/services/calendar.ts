@@ -23,6 +23,8 @@ export interface CalendarEntry {
   note: string;
   updated_at: string;
   created_at: string;
+  /** gewählte Gruppe (z. B. Instrument) */
+  group_name: string | null;
 }
 
 export interface CalendarFilter {
@@ -45,7 +47,8 @@ export async function calendarEntries(db: Db, userId: string, f: CalendarFilter)
        o.name AS offering_name, w.id AS workspace_id, w.name AS workspace_name, u.display_name AS booker_name,
        COALESCE(s.location, o.location) AS location,
        CASE WHEN b.user_id <> @uid OR b.status = 'confirmed' THEN COALESCE(s.online_info, o.online_info) ELSE '' END AS online_info,
-       CASE WHEN b.user_id = @uid THEN '' ELSE b.note END AS note, b.updated_at, b.created_at
+       CASE WHEN b.user_id = @uid THEN '' ELSE b.note END AS note, b.updated_at, b.created_at,
+       (SELECT g.name FROM ws_groups g WHERE g.id = b.group_id) AS group_name
      FROM bookings b
      JOIN slots s ON s.id = b.slot_id AND s.workspace_id = b.workspace_id
      JOIN offerings o ON o.id = b.offering_id AND o.workspace_id = b.workspace_id
@@ -68,7 +71,8 @@ export async function managesWorkspace(db: Db, userId: string, wsId: string) {
 
 export function entryTitle(e: CalendarEntry) {
   const prefix = e.status === 'requested' ? 'Angefragt: ' : e.status === 'confirmed' ? '' : 'Abgesagt: ';
-  return e.role === 'provider' ? `${prefix}${e.booker_name || 'Ohne Namen'} · ${e.offering_name}` : `${prefix}${e.offering_name} (${e.workspace_name})`;
+  const what = e.group_name ? `${e.offering_name} – ${e.group_name}` : e.offering_name;
+  return e.role === 'provider' ? `${prefix}${e.booker_name || 'Ohne Namen'} · ${what}` : `${prefix}${what} (${e.workspace_name})`;
 }
 
 // ---------- iCalendar ----------
@@ -157,7 +161,7 @@ export function toTermin(e: CalendarEntry) {
   const en = Date.parse(e.ends_at);
   return {
     id: `${e.id}-${e.role}`,
-    titel: e.role === 'provider' ? `${e.booker_name || 'Ohne Namen'} · ${e.offering_name}` : e.offering_name,
+    titel: `${e.role === 'provider' ? `${e.booker_name || 'Ohne Namen'} · ` : ''}${e.offering_name}${e.group_name ? ` – ${e.group_name}` : ''}`,
     verein_name: e.workspace_name,
     beginn: `${localDate(s, e.timezone)}T${localTime(s, e.timezone)}`,
     ende: `${localDate(en, e.timezone)}T${localTime(en, e.timezone)}`,
