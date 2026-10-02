@@ -1019,7 +1019,7 @@ td.actions {
 }
 .week-grid {
   display: grid;
-  grid-template-columns: 3.4rem repeat(7, minmax(96px, 1fr));
+  grid-template-columns: 3.4rem repeat(var(--days, 7), minmax(96px, 1fr));
   min-width: 760px;
   position: relative;
 }
@@ -1417,4 +1417,93 @@ input.money {
   background: var(--accent-soft);
   color: var(--accent-strong);
   border-color: var(--accent);
+}
+
+/* Tagesansicht: eine breite Spalte, kein seitliches Scrollen */
+.week-grid.is-day {
+  min-width: 0;
+}
+.week-grid.is-day .ev-detail {
+  display: inline;
+}
+.week-head .segmented {
+  margin-left: auto;
+}
+/* Monatsansicht mit Einträgen */
+.agenda {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+.agenda-scroll {
+  overflow-x: auto;
+}
+.agenda-grid {
+  width: 100%;
+  min-width: 700px;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.agenda-grid th {
+  font-size: 0.85rem;
+  color: var(--muted);
+  padding: 0.3rem;
+}
+.agenda-grid td {
+  vertical-align: top;
+  height: 7.5rem;
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.3rem;
+  font-size: 0.78rem;
+}
+.agenda-grid td.past {
+  background: var(--surface-2);
+}
+.agenda-grid td.today .agenda-day {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.agenda-day {
+  display: inline-block;
+  min-width: 1.6rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  font-weight: 700;
+  text-decoration: none;
+  color: var(--text);
+}
+.agenda-grid ul {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.agenda-ev {
+  border-radius: 4px;
+  padding: 1px 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.agenda-ev a {
+  color: inherit;
+  text-decoration: none;
+}
+.agenda-ev.ev-todo {
+  background: var(--booked);
+  color: var(--on-booked);
+  box-shadow: inset 3px 0 0 var(--focus);
+}
+.agenda-free {
+  display: inline-block;
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  background: var(--free);
+  border: 1px solid var(--free-border);
+  color: var(--text);
+  text-decoration: none;
 }

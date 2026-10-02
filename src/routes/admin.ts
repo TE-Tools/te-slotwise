@@ -62,7 +62,7 @@ import {
 import { TEMPLATE_LABELS, type Template } from '../mail/templates.ts';
 import { addDays, COMMON_TIME_ZONES, durationLabel, isoWeekday, formatDate, formatTime, isValidTimeZone, LocalTimeError, localDate, localTime, localToUtc } from '../time.ts';
 import { awaitingLabel, proposalNote, timeChangeForm } from '../views/booking.ts';
-import { monthCalendar, monthRange, parseMonth } from '../views/calendar.ts';
+import { monthAgenda, monthCalendar, monthRange, parseMonth, type AgendaEntry } from '../views/calendar.ts';
 import { parseWeek, weekCalendar, weekRange, type WeekItem } from '../views/week.ts';
 import { bookingBadge, checked, emptyState, errorBox, flash, options, pageHeader, shareBox, slotStateBadge, when, type Frag, type H } from '../views/ui.ts';
 import { parseTimeChange } from './account.ts';
@@ -564,8 +564,18 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     const { ws } = await requireWs(c, 'bookings.manage');
     const { db } = c.get('deps');
     const tz = ws.timezone;
-    const weekStart = parseWeek(c.req.query('week'), localDate(Date.now(), tz));
-    const [fromIso, toIso] = weekRange(weekStart, tz);
+    const today = localDate(Date.now(), tz);
+    // Ansicht: Tag, Woche (Standard) oder Monat.
+    const view = oneOf(c.req.query('view') ?? '', ['day', 'week', 'month'] as const, 'week');
+    const dayParam = /^\d{4}-\d{2}-\d{2}$/.test(c.req.query('day') ?? '') ? c.req.query('day')! : null;
+    const weekStart = view === 'day' ? (dayParam ?? today) : parseWeek(c.req.query('week') ?? dayParam ?? undefined, today);
+    const month = parseMonth(c.req.query('month'), dayParam ?? c.req.query('week') ?? today);
+    const [fromIso, toIso] =
+      view === 'month'
+        ? (monthRange(month).map((d) => new Date(localToUtc(d, '00:00', tz)).toISOString()) as [string, string])
+        : view === 'day'
+          ? ([new Date(localToUtc(weekStart, '00:00', tz)).toISOString(), new Date(localToUtc(addDays(weekStart, 1), '00:00', tz)).toISOString()] as [string, string])
+          : weekRange(weekStart, tz);
     const offeringId = c.req.query('offering') || undefined;
     const slots = await listSlotsAdmin(db, ws.id, { fromIso: new Date(Date.parse(fromIso) - 86_400_000).toISOString(), toIso, offeringId });
     const bookings = (await listWorkspaceBookings(db, ws.id, { fromIso, toIso, offeringId })).filter((b) => b.status === 'requested' || b.status === 'confirmed');
@@ -611,36 +621,75 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
       for (const [k, v] of Object.entries({ offering: offeringId, ...extra })) if (v) p.set(k, v);
       return `/w/${ws.id}/calendar?${p}`;
     };
-    return page(c, ws, 'calendar', 'Kalender', [
-      flash(c.req.query('msg'), c.req.query('n') ? `(${Number(c.req.query('n'))} angelegt${Number(c.req.query('k')) ? `, ${Number(c.req.query('k'))} übersprungen` : ''})` : undefined),
-      pageHeader(
-        'Wochenkalender',
-        'Auf eine freie (graue) Uhrzeit klicken, um dort Slots anzulegen. Klick auf einen Eintrag öffnet Slot oder Buchung.',
-        html`<a class="btn btn-secondary" href="/profile#kalender">Kalender abonnieren</a> <a class="btn" href="/w/${ws.id}/slots/new">Slots anlegen</a>`,
-      ),
-      html`<form method="get" action="/w/${ws.id}/calendar" class="filters">
-        <input type="hidden" name="week" value="${weekStart}">
-        <label>Angebot <select name="offering"><option value="">alle</option>${options(offerings.map((o) => ({ value: o.id, label: o.name })), offeringId)}</select></label>
-        <button class="btn btn-secondary" type="submit">Filtern</button>
-      </form>`,
-      weekCalendar({
+    // Bezugstag beim Umschalten: heute, wenn er im angezeigten Zeitraum liegt, sonst Monatsanfang bzw. Wochenmitte.
+    const anchorDay =
+      view === 'month'
+        ? today.startsWith(month)
+          ? today
+          : `${month}-01`
+        : view === 'week'
+          ? weekStart <= today && today < addDays(weekStart, 7)
+            ? today
+            : addDays(weekStart, 3)
+          : weekStart;
+    const toolbar = html`<div class="segmented" role="group" aria-label="Ansicht">
+      <a href="${q({ view: 'day', day: anchorDay })}" ${view === 'day' ? raw('aria-current="true"') : ''}>Tag</a>
+      <a href="${q({ view: 'week', week: anchorDay })}" ${view === 'week' ? raw('aria-current="true"') : ''}>Woche</a>
+      <a href="${q({ view: 'month', month: anchorDay.slice(0, 7) })}" ${view === 'month' ? raw('aria-current="true"') : ''}>Monat</a>
+    </div>`;
+    const legend = [
+      { kind: 'free' as const, label: 'Frei (gern)' },
+      { kind: 'reluctant' as const, label: 'Eher ungern' },
+      { kind: 'confirmed' as const, label: 'Belegt (fest)' },
+      { kind: 'requested' as const, label: 'Angefragt' },
+      { kind: 'proposal' as const, label: 'Zeitvorschlag offen' },
+      ...(billing ? [{ kind: 'todo' as const, label: 'Vergangen, noch abzuhaken' }] : []),
+      { kind: 'blocked' as const, label: 'Gesperrt (kein Slot)' },
+    ];
+    let calendarView: H;
+    if (view === 'month') {
+      // Pro Tag: Buchungen mit Uhrzeit und Name, freie Slots als Anzahl.
+      const entries = new Map<string, AgendaEntry[]>();
+      const free = new Map<string, number>();
+      for (const it of items.sort((a, b) => a.start - b.start)) {
+        const d = localDate(it.start, tz);
+        if (it.kind === 'free' || it.kind === 'reluctant') {
+          if (!it.background) free.set(d, (free.get(d) ?? 0) + 1);
+          continue;
+        }
+        if (it.kind !== 'confirmed' && it.kind !== 'requested' && it.kind !== 'proposal') continue;
+        if (!entries.has(d)) entries.set(d, []);
+        entries.get(d)!.push({ time: localTime(it.start, tz), label: it.title, kind: it.mark === 'todo' ? 'todo' : it.kind, href: it.href });
+      }
+      calendarView = monthAgenda({ month, today, entries, free, dayHref: (d) => q({ view: 'day', day: d }), monthHref: (m) => q({ view: 'month', month: m }), toolbar });
+    } else {
+      calendarView = weekCalendar({
         weekStart,
         tz,
         items,
-        hrefFor: (w) => q({ week: w }),
-        dayHref: (d) => `/w/${ws.id}/bookings?from=${d}&to=${d}`,
+        days: view === 'day' ? 1 : 7,
+        toolbar,
+        hrefFor: (w) => (view === 'day' ? q({ view: 'day', day: w }) : q({ week: w })),
+        dayHref: view === 'week' ? (d) => q({ view: 'day', day: d }) : undefined,
         cellHref: can(ws.role, 'slots.manage') ? (d, hhmm) => `/w/${ws.id}/slots/new?date=${d}&from=${hhmm}${offeringId ? `&offering=${offeringId}` : ''}` : undefined,
-        legend: [
-          { kind: 'free', label: 'Frei (gern)' },
-          { kind: 'reluctant', label: 'Eher ungern' },
-          { kind: 'confirmed', label: 'Belegt (fest)' },
-          { kind: 'requested', label: 'Angefragt' },
-          { kind: 'proposal', label: 'Zeitvorschlag offen' },
-          ...(billing ? [{ kind: 'todo' as const, label: 'Vergangen, noch abzuhaken' }] : []),
-          { kind: 'blocked', label: 'Gesperrt (kein Slot)' },
-        ],
-      }),
-      can(ws.role, 'slots.manage')
+        legend,
+      });
+    }
+    return page(c, ws, 'calendar', 'Kalender', [
+      flash(c.req.query('msg'), c.req.query('n') ? `(${Number(c.req.query('n'))} angelegt${Number(c.req.query('k')) ? `, ${Number(c.req.query('k'))} übersprungen` : ''})` : undefined),
+      pageHeader(
+        'Kalender',
+        view === 'month' ? 'Alle Termine des Monats. Klick auf einen Tag öffnet die Tagesansicht.' : 'Auf eine freie (graue) Uhrzeit klicken, um dort Slots anzulegen. Klick auf einen Eintrag öffnet Slot oder Buchung.',
+        html`<a class="btn btn-secondary" href="/profile#kalender">Kalender abonnieren</a> <a class="btn" href="/w/${ws.id}/slots/new">Slots anlegen</a>`,
+      ),
+      html`<form method="get" action="/w/${ws.id}/calendar" class="filters">
+        <input type="hidden" name="view" value="${view}">
+        ${view === 'month' ? html`<input type="hidden" name="month" value="${month}">` : view === 'day' ? html`<input type="hidden" name="day" value="${weekStart}">` : html`<input type="hidden" name="week" value="${weekStart}">`}
+        <label>Angebot <select name="offering"><option value="">alle</option>${options(offerings.map((o) => ({ value: o.id, label: o.name })), offeringId)}</select></label>
+        <button class="btn btn-secondary" type="submit">Filtern</button>
+      </form>`,
+      calendarView,
+      can(ws.role, 'slots.manage') && view === 'week'
         ? html`<section class="card repeat-week"><h2>Woche wiederholen</h2>
             ${(() => {
               const n = slots.filter((sl) => sl.status !== 'closed' && Date.parse(sl.starts_at) >= Date.parse(fromIso)).length;

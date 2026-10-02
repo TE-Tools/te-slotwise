@@ -659,3 +659,28 @@ test('Gruppen als Instrumente: Wahl beim Buchen, Pflege auf der Schülerseite, A
   const last = (await db.get<{ group_id: string }>(`SELECT group_id FROM bookings WHERE user_id = ? ORDER BY starts_at DESC LIMIT 1`, [kidId]))!;
   assert.equal(last.group_id, klavier);
 });
+
+test('Kalender: Tag-, Wochen- und Monatsansicht', async () => {
+  const { app, mailer, db } = await setup();
+  const owner = await login(app, mailer, 'ansicht@example.com', 'Anna Ansicht');
+  const wsId = /\/w\/([^/]+)\//.exec((await owner.req('/workspaces', { method: 'POST', form: { name: 'Bratsche', kind: 'personal', timezone: 'Europe/Berlin', description: '' } })).headers.get('location')!)![1];
+  const offId = /offerings\/([^?]+)/.exec((await owner.req(`/w/${wsId}/offerings`, { method: 'POST', form: { name: 'Stunde', duration_min: '45', confirmation_mode: 'manual', visibility: 'internal' } })).headers.get('location')!)![1];
+  await login(app, mailer, 'ben@example.com', 'Ben Bogen');
+  const bid = (await db.get<{ id: string }>(`SELECT id FROM users WHERE email = 'ben@example.com'`))!.id;
+  await db.run(`INSERT INTO memberships (id, workspace_id, user_id, role, created_at) VALUES ('m-ben', ?, ?, 'member', ?)`, [wsId, bid, new Date().toISOString()]);
+  const day = futureDate(3);
+  await owner.req(`/w/${wsId}/students/${bid}/lessons`, { method: 'POST', form: { offering_id: offId, date: day, time: '16:30', duration: '', repeat: 'once' } });
+  await owner.req(`/w/${wsId}/slots/series`, { method: 'POST', form: { offering_id: offId, kind: 'fixed', from: day, window_start: '18:00', window_end: '19:30', repeat: 'once' } });
+  const dayView = await (await owner.req(`/w/${wsId}/calendar?view=day&day=${day}`)).text();
+  assert.match(dayView, /week-grid is-day/);
+  assert.match(dayView, /Ben Bogen/);
+  assert.match(dayView, /aria-current="true">Tag</);
+  const month = await (await owner.req(`/w/${wsId}/calendar?view=month&month=${day.slice(0, 7)}`)).text();
+  assert.match(month, /class="agenda"/);
+  assert.match(month, /16:30<\/span> Ben Bogen/);
+  assert.match(month, /2 frei/);
+  assert.match(month, new RegExp(`view=day&amp;day=${day}`));
+  // Woche bleibt Standard und bietet „Woche wiederholen“; Monat nicht.
+  assert.match(await (await owner.req(`/w/${wsId}/calendar?week=${day}`)).text(), /Woche wiederholen/);
+  assert.doesNotMatch(month, /Woche wiederholen/);
+});

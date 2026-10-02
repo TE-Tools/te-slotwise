@@ -21,6 +21,7 @@ export interface WeekItem {
 }
 
 const DAY_NAMES = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const DAY_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 const HOUR_PX = 56;
 
 /** Montag der Woche, in der `date` liegt. */
@@ -77,10 +78,15 @@ export function weekCalendar(o: {
   legend?: { kind: WeekItemKind; label: string }[];
   /** Klick auf eine leere Stunde (z. B. „hier Slots anlegen“). */
   cellHref?: (date: string, hhmm: string) => string;
+  /** 7 = Woche (Standard), 1 = einzelner Tag ab `weekStart` */
+  days?: number;
+  /** zusätzliche Bedienelemente rechts im Kopf (z. B. Tag/Woche/Monat) */
+  toolbar?: H;
 }): H {
   const now = Date.now();
   const today = localDate(now, o.tz);
-  const days = Array.from({ length: 7 }, (_, i) => addDays(o.weekStart, i));
+  const span = o.days === 1 ? 1 : 7;
+  const days = Array.from({ length: span }, (_, i) => addDays(o.weekStart, i));
 
   // Einträge auf Tage verteilen (über Mitternacht reichende Einträge werden aufgeteilt).
   const perDay = new Map<string, { item: WeekItem; top: number; bottom: number }[]>(days.map((d) => [d, []]));
@@ -109,28 +115,29 @@ export function weekCalendar(o: {
   const nowMin = nowParts.hour * 60 + nowParts.minute;
 
   const first = days[0];
-  const last = days[6];
+  const last = days[days.length - 1];
   const fmtDay = (d: string) => `${Number(d.slice(8))}.${Number(d.slice(5, 7))}.`;
-  const title = `${fmtDay(first)} – ${fmtDay(last)}${last.slice(0, 4)}`;
+  const title = span === 1 ? `${DAY_LONG[isoWeekday(first) - 1]}, ${fmtDay(first)}${first.slice(0, 4)}` : `${fmtDay(first)} – ${fmtDay(last)}${last.slice(0, 4)}`;
 
   return html`<section class="week" aria-label="Wochenkalender ${title}">
     <div class="week-head">
       <div class="week-nav">
-        <a class="btn btn-secondary btn-small" href="${o.hrefFor(addDays(o.weekStart, -7))}" aria-label="Vorherige Woche">‹</a>
-        <a class="btn btn-secondary btn-small" href="${o.hrefFor(weekStartOf(today))}">Heute</a>
-        <a class="btn btn-secondary btn-small" href="${o.hrefFor(addDays(o.weekStart, 7))}" aria-label="Nächste Woche">›</a>
+        <a class="btn btn-secondary btn-small" href="${o.hrefFor(addDays(o.weekStart, -span))}" aria-label="${span === 1 ? 'Vorheriger Tag' : 'Vorherige Woche'}">‹</a>
+        <a class="btn btn-secondary btn-small" href="${o.hrefFor(span === 1 ? today : weekStartOf(today))}">Heute</a>
+        <a class="btn btn-secondary btn-small" href="${o.hrefFor(addDays(o.weekStart, span))}" aria-label="${span === 1 ? 'Nächster Tag' : 'Nächste Woche'}">›</a>
       </div>
       <h2 class="week-title">${title}</h2>
       <span class="muted">${o.tz}</span>
+      ${o.toolbar ?? ''}
     </div>
     ${o.legend ? html`<ul class="week-legend">${o.legend.map((l) => html`<li><span class="swatch ev-${l.kind}"></span>${l.label}</li>`)}</ul>` : ''}
     <div class="week-scroll">
-      <div class="week-grid" style="--hours:${maxHour - minHour};--hour-px:${HOUR_PX}px">
+      <div class="week-grid ${span === 1 ? 'is-day' : ''}" style="--hours:${maxHour - minHour};--hour-px:${HOUR_PX}px;--days:${span}">
         <div class="week-corner"></div>
         ${days.map(
-          (d, i) => html`<div class="week-dayhead ${d === today ? 'is-today' : ''}">${o.dayHref
-            ? html`<a href="${o.dayHref(d)}"><span>${DAY_NAMES[i]}</span> <strong>${fmtDay(d)}</strong></a>`
-            : html`<span>${DAY_NAMES[i]}</span> <strong>${fmtDay(d)}</strong>`}</div>`,
+          (d) => html`<div class="week-dayhead ${d === today ? 'is-today' : ''}">${o.dayHref
+            ? html`<a href="${o.dayHref(d)}"><span>${DAY_NAMES[isoWeekday(d) - 1]}</span> <strong>${fmtDay(d)}</strong></a>`
+            : html`<span>${DAY_NAMES[isoWeekday(d) - 1]}</span> <strong>${fmtDay(d)}</strong>`}</div>`,
         )}
         <div class="week-axis" style="height:${height}px">
           ${Array.from({ length: maxHour - minHour }, (_, i) => html`<span style="top:${i * HOUR_PX}px">${String(minHour + i).padStart(2, '0')}:00</span>`)}
