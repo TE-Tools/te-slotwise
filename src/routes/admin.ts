@@ -54,6 +54,7 @@ import {
   renewInvitation,
   revokeInvitation,
   rotatePublicToken,
+  setCalendarHours,
   setBookedDisplay,
   saveGroup,
   setGroupMembers,
@@ -179,6 +180,19 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
           </div>
           <span class="hint">Mit Namen wird nur der Vorname gezeigt, nie die E-Mail-Adresse. Bitte nur mit Einverständnis der Buchenden. Jede Person sieht nur Termine, die für sie freigegeben sind.</span>
         </fieldset>
+        <fieldset class="field"><legend>Angezeigte Uhrzeiten im Kalender</legend>
+          <div class="grid-form">
+            <label>Von <select name="cal_from">${options(
+              [{ value: '', label: 'automatisch' }, ...Array.from({ length: 24 }, (_, h) => ({ value: String(h), label: `${String(h).padStart(2, '0')}:00 Uhr` }))],
+              ws.cal_from_hour === null ? '' : String(ws.cal_from_hour),
+            )}</select></label>
+            <label>Bis <select name="cal_to">${options(
+              [{ value: '', label: 'automatisch' }, ...Array.from({ length: 24 }, (_, i) => ({ value: String(i + 1), label: `${String(i + 1).padStart(2, '0')}:00 Uhr` }))],
+              ws.cal_to_hour === null ? '' : String(ws.cal_to_hour),
+            )}</select></label>
+          </div>
+          <span class="hint">Z. B. 13 bis 19 Uhr: Der Wochen- und Tageskalender zeigt nur diese Zeit – dadurch werden die Termine größer. Gilt für deinen Kalender und für die Buchungsseite. „Automatisch“ zeigt 8–19 Uhr und mehr, wenn Termine früher oder später liegen.</span>
+        </fieldset>
         <button class="btn" type="submit">Speichern</button>
       </form></section>`,
       html`<section class="card"><h2>Öffentlicher Link</h2>
@@ -213,7 +227,12 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     });
     const modes = ['hidden', 'anonymous', 'names'] as const;
     await setBookedDisplay(c.get('deps').db, ws.id, oneOf(str(f, 'show_booked_public'), modes, 'anonymous'), oneOf(str(f, 'show_booked_members'), modes, 'anonymous'));
-    return back(c, `/w/${ws.id}/settings`, 'saved');
+    const hour = (k: string) => (/^\d{1,2}$/.test(str(f, k, 2)) ? Number(str(f, k, 2)) : null);
+    const from = hour('cal_from');
+    const to = hour('cal_to');
+    // Nur eine Seite gesetzt: die andere sinnvoll ergänzen (Standard 8 bzw. 19 Uhr).
+    const ok = await setCalendarHours(c.get('deps').db, ws.id, from ?? (to !== null ? Math.min(8, to - 1) : null), to ?? (from !== null ? Math.max(19, from + 1) : null));
+    return back(c, `/w/${ws.id}/settings`, ok ? 'saved' : 'calendar_hours_invalid');
   });
 
   app.post('/w/:wid/settings/rotate', async (c) => {
@@ -672,6 +691,8 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         toolbar,
         hrefFor: (w) => (view === 'day' ? q({ view: 'day', day: w }) : q({ week: w })),
         dayHref: view === 'week' ? (d) => q({ view: 'day', day: d }) : undefined,
+        hours: { from: ws.cal_from_hour, to: ws.cal_to_hour },
+        hoursHref: can(ws.role, 'workspace.manage') ? `/w/${ws.id}/settings` : undefined,
         cellHref: can(ws.role, 'slots.manage') ? (d, hhmm) => `/w/${ws.id}/slots/new?date=${d}&from=${hhmm}${offeringId ? `&offering=${offeringId}` : ''}` : undefined,
         legend,
       });

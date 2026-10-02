@@ -278,18 +278,69 @@ main:focus {
     grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
   }
-  .subnav {
-    position: static;
-    padding: 0.5rem;
+}
+/* Handy: Menü als feste Leiste ganz unten (gut mit dem Daumen erreichbar) */
+.bottomnav {
+  display: none;
+}
+@media (max-width: 820px) {
+  .subnav,
+  .bottomnav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: 20;
+    display: block;
+    margin: 0;
+    padding: 0.3rem 0.4rem calc(0.3rem + env(safe-area-inset-bottom));
+    background: var(--surface);
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    box-shadow: 0 -2px 12px rgb(0 0 0 / 8%);
   }
-  .subnav ul {
+  .subnav-title {
+    display: none;
+  }
+  .subnav ul,
+  .bottomnav ul {
     display: flex;
     gap: 0.25rem;
     overflow-x: auto;
-    padding-bottom: 0.25rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
   }
-  .subnav a {
+  .subnav ul::-webkit-scrollbar,
+  .bottomnav ul::-webkit-scrollbar {
+    display: none;
+  }
+  .bottomnav li {
+    flex: 1;
+  }
+  .subnav a,
+  .bottomnav a {
+    display: block;
     white-space: nowrap;
+    text-align: center;
+    padding: 0.65rem 0.75rem;
+    border-radius: 10px;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.95rem;
+  }
+  .subnav a[aria-current='page'],
+  .bottomnav a[aria-current='page'] {
+    background: var(--accent-soft);
+    font-weight: 600;
+  }
+  /* Platz für die Leiste, damit nichts verdeckt wird */
+  body.has-bottomnav {
+    padding-bottom: calc(3.6rem + env(safe-area-inset-bottom));
   }
 }
 .footer {
@@ -1019,9 +1070,16 @@ td.actions {
 }
 .week-grid {
   display: grid;
-  grid-template-columns: 3.4rem repeat(var(--days, 7), minmax(96px, 1fr));
-  min-width: 760px;
+  grid-template-columns: 3.4rem repeat(var(--days, 7), minmax(104px, 1fr));
+  min-width: 800px;
   position: relative;
+  /* Stundenhöhe wächst mit dem Bildschirm: wenige angezeigte Stunden = große Einträge */
+  --hour-px: max(var(--hour-min, 64px), calc((100vh - 260px) / var(--hours, 11)));
+}
+@supports (height: 100dvh) {
+  .week-grid {
+    --hour-px: max(var(--hour-min, 64px), calc((100dvh - 260px) / var(--hours, 11)));
+  }
 }
 .week-corner,
 .week-dayhead {
@@ -1054,7 +1112,7 @@ td.actions {
   position: absolute;
   right: 0.4rem;
   transform: translateY(-0.55em);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1084,9 +1142,9 @@ td.actions {
 .ev {
   position: absolute;
   overflow: hidden;
-  border-radius: 6px;
-  padding: 0.15rem 0.35rem;
-  font-size: 0.78rem;
+  border-radius: 7px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
   line-height: 1.25;
   color: var(--text);
   text-decoration: none;
@@ -1111,7 +1169,7 @@ a.ev:focus-visible {
 .ev-time {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  font-size: 0.72rem;
+  font-size: 0.8rem;
 }
 .ev-title {
   font-weight: 600;
@@ -1125,6 +1183,12 @@ a.ev:focus-visible {
 .swatch.ev-free {
   background: var(--free);
   border-color: var(--free-border);
+}
+/* Freie Termine deutlich hervorheben */
+.ev-free:not(.ev-bg) {
+  border-width: 2px;
+  border-left-width: 5px;
+  color: var(--free-text, var(--text));
 }
 .ev-reluctant,
 .swatch.ev-reluctant {

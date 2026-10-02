@@ -22,7 +22,9 @@ export interface WeekItem {
 
 const DAY_NAMES = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const DAY_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
-const HOUR_PX = 56;
+/** Mindesthöhe einer Stunde; per CSS wächst sie mit der Bildschirmhöhe (--hour-px), Positionen sind relativ dazu. */
+const MIN_HOUR_PX = 64;
+const at = (hours: number) => `calc(var(--hour-px) * ${+hours.toFixed(4)})`;
 
 /** Montag der Woche, in der `date` liegt. */
 export function weekStartOf(date: string) {
@@ -82,6 +84,10 @@ export function weekCalendar(o: {
   days?: number;
   /** zusätzliche Bedienelemente rechts im Kopf (z. B. Tag/Woche/Monat) */
   toolbar?: H;
+  /** fest eingestellter sichtbarer Zeitraum (volle Stunden); sonst automatisch */
+  hours?: { from: number | null; to: number | null };
+  /** Link zur Einstellung des Zeitraums (nur für Verwaltende) */
+  hoursHref?: string;
 }): H {
   const now = Date.now();
   const today = localDate(now, o.tz);
@@ -90,8 +96,10 @@ export function weekCalendar(o: {
 
   // Einträge auf Tage verteilen (über Mitternacht reichende Einträge werden aufgeteilt).
   const perDay = new Map<string, { item: WeekItem; top: number; bottom: number }[]>(days.map((d) => [d, []]));
-  let minHour = 8;
-  let maxHour = 19;
+  const fixed = o.hours && o.hours.from !== null && o.hours.to !== null && o.hours.to > o.hours.from ? { from: o.hours.from, to: o.hours.to } : null;
+  let minHour = fixed?.from ?? 8;
+  let maxHour = fixed?.to ?? 19;
+  let hidden = 0;
   for (const item of o.items) {
     for (const d of days) {
       const dayStart = localToUtcSafe(d, o.tz);
@@ -103,14 +111,25 @@ export function weekCalendar(o: {
       const top = localDate(s, o.tz) === d ? sp.hour * 60 + sp.minute : 0;
       const ep = localParts(e, o.tz);
       const bottom = e >= dayEnd ? 24 * 60 : ep.hour * 60 + ep.minute;
+      if (fixed) {
+        // Nur den eingestellten Zeitraum zeigen; Einträge außerhalb werden gezählt, angeschnittene gekürzt.
+        const t = Math.max(top, fixed.from * 60);
+        const b = Math.min(bottom, fixed.to * 60);
+        if (b <= t) {
+          if (!item.background) hidden++;
+          continue;
+        }
+        perDay.get(d)!.push({ item, top: t, bottom: Math.max(b, t + 15) });
+        continue;
+      }
       perDay.get(d)!.push({ item, top, bottom: Math.max(bottom, top + 15) });
       minHour = Math.min(minHour, Math.floor(top / 60));
       maxHour = Math.max(maxHour, Math.ceil(bottom / 60));
     }
   }
   const startMin = minHour * 60;
-  const height = (maxHour - minHour) * HOUR_PX;
-  const y = (min: number) => ((min - startMin) / 60) * HOUR_PX;
+  const hours = maxHour - minHour;
+  const y = (min: number) => (min - startMin) / 60; // in Stunden ab Beginn
   const nowParts = localParts(now, o.tz);
   const nowMin = nowParts.hour * 60 + nowParts.minute;
 
@@ -131,16 +150,19 @@ export function weekCalendar(o: {
       ${o.toolbar ?? ''}
     </div>
     ${o.legend ? html`<ul class="week-legend">${o.legend.map((l) => html`<li><span class="swatch ev-${l.kind}"></span>${l.label}</li>`)}</ul>` : ''}
+    ${hidden
+      ? html`<p class="hint week-hidden">${hidden === 1 ? 'Ein Eintrag liegt' : `${hidden} Einträge liegen`} außerhalb der angezeigten Zeit (${minHour}–${maxHour} Uhr).${o.hoursHref ? html` <a href="${o.hoursHref}">Anzeigezeit ändern</a>` : ''}</p>`
+      : ''}
     <div class="week-scroll">
-      <div class="week-grid ${span === 1 ? 'is-day' : ''}" style="--hours:${maxHour - minHour};--hour-px:${HOUR_PX}px;--days:${span}">
+      <div class="week-grid ${span === 1 ? 'is-day' : ''}" style="--hours:${hours};--hour-min:${MIN_HOUR_PX}px;--days:${span}">
         <div class="week-corner"></div>
         ${days.map(
           (d) => html`<div class="week-dayhead ${d === today ? 'is-today' : ''}">${o.dayHref
             ? html`<a href="${o.dayHref(d)}"><span>${DAY_NAMES[isoWeekday(d) - 1]}</span> <strong>${fmtDay(d)}</strong></a>`
             : html`<span>${DAY_NAMES[isoWeekday(d) - 1]}</span> <strong>${fmtDay(d)}</strong>`}</div>`,
         )}
-        <div class="week-axis" style="height:${height}px">
-          ${Array.from({ length: maxHour - minHour }, (_, i) => html`<span style="top:${i * HOUR_PX}px">${String(minHour + i).padStart(2, '0')}:00</span>`)}
+        <div class="week-axis" style="height:${at(hours)}">
+          ${Array.from({ length: hours }, (_, i) => html`<span style="top:${at(i)}">${String(minHour + i).padStart(2, '0')}:00</span>`)}
         </div>
         ${days.map((d) => {
           const entries = perDay.get(d)!;
@@ -148,16 +170,16 @@ export function weekCalendar(o: {
           const fg = placeDay(entries.filter((e) => !e.item.background));
           const cells =
             o.cellHref && d >= today
-              ? Array.from({ length: maxHour - minHour }, (_, i) => {
+              ? Array.from({ length: hours }, (_, i) => {
                   const hh = String(minHour + i).padStart(2, '0');
-                  return html`<a class="week-cell" style="top:${i * HOUR_PX}px;height:${HOUR_PX}px" href="${o.cellHref!(d, `${hh}:00`)}" aria-label="Slots am ${fmtDay(d)} ab ${hh}:00 anlegen" title="Hier Slots anlegen (${hh}:00)"></a>`;
+                  return html`<a class="week-cell" style="top:${at(i)};height:${at(1)}" href="${o.cellHref!(d, `${hh}:00`)}" aria-label="Slots am ${fmtDay(d)} ab ${hh}:00 anlegen" title="Hier Slots anlegen (${hh}:00)"></a>`;
                 })
               : '';
-          return html`<div class="week-day ${d === today ? 'is-today' : ''} ${d < today ? 'is-past' : ''}" style="height:${height}px">
+          return html`<div class="week-day ${d === today ? 'is-today' : ''} ${d < today ? 'is-past' : ''}" style="height:${at(hours)}">
             ${cells}
             ${bg.map((e) => event(e.item, y(e.top), y(e.bottom) - y(e.top), 0, 1, o.tz, true))}
             ${fg.map((p) => event(p.item, y(p.top), y(p.bottom) - y(p.top), p.lane, p.lanes, o.tz, false))}
-            ${d === today && nowMin >= startMin && nowMin <= maxHour * 60 ? html`<div class="week-now" style="top:${y(nowMin)}px" aria-hidden="true"></div>` : ''}
+            ${d === today && nowMin >= startMin && nowMin <= maxHour * 60 ? html`<div class="week-now" style="top:${at(y(nowMin))}" aria-hidden="true"></div>` : ''}
           </div>`;
         })}
       </div>
@@ -174,11 +196,13 @@ function localToUtcSafe(date: string, tz: string) {
   }
 }
 
-function event(item: WeekItem, top: number, h: number, lane: number, lanes: number, tz: string, background: boolean): H {
+/** `top` und `h` in Stunden; die Mindesthöhe in Pixeln entscheidet über die kompakte Darstellung. */
+function event(item: WeekItem, top: number, hHours: number, lane: number, lanes: number, tz: string, background: boolean): H {
+  const h = hHours * MIN_HOUR_PX;
   const sp = localParts(item.start, tz);
   const ep = localParts(item.end, tz);
   const t = `${String(sp.hour).padStart(2, '0')}:${String(sp.minute).padStart(2, '0')}–${String(ep.hour).padStart(2, '0')}:${String(ep.minute).padStart(2, '0')}`;
-  const style = `top:${top}px;height:${Math.max(h, 18)}px;left:calc(${(lane / lanes) * 100}% + 2px);width:calc(${100 / lanes}% - 4px)`;
+  const style = `top:${at(top)};height:max(${at(hHours)}, 20px);left:calc(${(lane / lanes) * 100}% + 2px);width:calc(${100 / lanes}% - 4px)`;
   const label = `${t} ${item.title}${item.detail ? `, ${item.detail}` : ''}`;
   const inner = html`<span class="ev-time">${t}</span><span class="ev-title">${item.title}</span>${item.detail && h > 40 ? html`<span class="ev-detail">${item.detail}</span>` : ''}`;
   const cls = `ev ev-${item.kind} ${background ? 'ev-bg' : ''} ${h < 34 ? 'ev-compact' : ''} ${item.mark ? `ev-${item.mark}` : ''}`;

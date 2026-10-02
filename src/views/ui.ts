@@ -39,6 +39,7 @@ const MESSAGES: Record<string, { text: string; kind: 'ok' | 'error' | 'info' }> 
   retry_done: { text: 'Neuer Versandversuch ausgeführt – Status siehe Liste.', kind: 'info' },
   last_owner: { text: 'Der letzte Eigentümer kann nicht entfernt oder herabgestuft werden.', kind: 'error' },
   sole_owner: { text: 'Konto kann nicht gelöscht werden: Du bist alleinige:r Eigentümer:in eines Arbeitsbereichs. Übertrage oder lösche ihn zuerst.', kind: 'error' },
+  calendar_hours_invalid: { text: 'Die Anzeigezeit „bis“ muss nach „von“ liegen – sie wurde auf automatisch gesetzt. Die übrigen Einstellungen sind gespeichert.', kind: 'error' },
   booking_moved: { text: 'Termin verschoben – die neue Zeit gilt sofort und ist bestätigt.', kind: 'ok' },
   proposal_sent: { text: 'Vorschlag gesendet. Die andere Seite muss zustimmen, erst dann gilt die neue Zeit.', kind: 'ok' },
   proposal_accepted: { text: 'Vorschlag angenommen – der Termin ist jetzt fest.', kind: 'ok' },
@@ -146,7 +147,7 @@ export function layout(o: LayoutOpts): H {
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <script src="/static/app.js" defer></script>
 </head>
-<body>
+<body class="${o.user ? 'has-bottomnav' : ''}">
 <a class="skip" href="#main">Zum Inhalt springen</a>
 <header class="topbar">
   <a class="brand" href="${o.user ? '/dashboard' : '/'}"><span class="brand-mark" aria-hidden="true"></span>TE-Slotwise</a>
@@ -176,6 +177,16 @@ export function layout(o: LayoutOpts): H {
     ${o.body}
   </main>
 </div>
+${o.user && !o.ws
+  ? html`<nav class="bottomnav" aria-label="Menü">
+      <ul>
+        <li><a href="/dashboard">Übersicht</a></li>
+        <li><a href="/bookings">Meine Termine</a></li>
+        ${o.workspaces?.length ? html`<li><a href="/w/${o.workspaces[0].id}">${o.workspaces.length === 1 ? o.workspaces[0].name : 'Arbeitsbereich'}</a></li>` : ''}
+        <li><a href="/profile">Profil</a></li>
+      </ul>
+    </nav>`
+  : ''}
 <footer class="footer">TE-Slotwise · <a href="/impressum">Impressum</a> · <a href="/datenschutz">Datenschutz</a></footer>
 </body>
 </html>`;

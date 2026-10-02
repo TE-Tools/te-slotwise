@@ -16,6 +16,9 @@ export interface Workspace {
   /** Standardpreis in Cent (NULL = nicht festgelegt), siehe services/billing.ts. */
   default_price_cents: number | null;
   price_unit: 'lesson' | 'hour';
+  /** sichtbarer Zeitraum im Wochenkalender (volle Stunden), NULL = automatisch */
+  cal_from_hour: number | null;
+  cal_to_hour: number | null;
   created_at: string;
 }
 
@@ -60,6 +63,13 @@ export async function updateWorkspace(db: Db, wsId: string, p: { name: string; k
     p.publicEnabled ? 1 : 0,
     wsId,
   ]);
+}
+
+/** Sichtbarer Zeitraum im Kalender; null/null = automatisch. */
+export async function setCalendarHours(db: Db, wsId: string, from: number | null, to: number | null) {
+  const ok = from !== null && to !== null && from >= 0 && to <= 24 && to > from;
+  await db.run(`UPDATE workspaces SET cal_from_hour = ?, cal_to_hour = ? WHERE id = ?`, [ok ? from : null, ok ? to : null, wsId]);
+  return ok || (from === null && to === null);
 }
 
 export async function setBookedDisplay(db: Db, wsId: string, publicMode: BookedDisplay, membersMode: BookedDisplay) {

@@ -692,6 +692,22 @@ test('Kalender: Tag-, Wochen- und Monatsansicht', async () => {
   // Woche bleibt Standard und bietet „Woche wiederholen“; Monat nicht.
   assert.match(await (await owner.req(`/w/${wsId}/calendar?week=${day}`)).text(), /Woche wiederholen/);
   assert.doesNotMatch(month, /Woche wiederholen/);
+
+  // Anzeigezeit einstellen: nur 13–17 Uhr; der Termin um 18 Uhr liegt außerhalb und wird als Hinweis gezählt.
+  const settings = await (await owner.req(`/w/${wsId}/settings`)).text();
+  assert.match(settings, /Angezeigte Uhrzeiten im Kalender/);
+  const save = (from: string, to: string) =>
+    owner.req(`/w/${wsId}/settings`, { method: 'POST', form: { name: 'Bratsche', kind: 'personal', timezone: 'Europe/Berlin', description: '', show_booked_public: 'anonymous', show_booked_members: 'anonymous', cal_from: from, cal_to: to } });
+  assert.match((await save('13', '17')).headers.get('location')!, /msg=saved/);
+  const narrow = await (await owner.req(`/w/${wsId}/calendar?week=${day}`)).text();
+  assert.match(narrow, /--hours:4;/);
+  assert.match(narrow, />13:00</);
+  assert.doesNotMatch(narrow, />12:00</);
+  assert.match(narrow, /außerhalb der angezeigten Zeit \(13–17 Uhr\)/);
+  // Ungültig (bis vor von) → automatisch; leer → automatisch.
+  assert.match((await save('15', '10')).headers.get('location')!, /calendar_hours_invalid/);
+  assert.equal((await db.get<{ f: number | null }>(`SELECT cal_from_hour AS f FROM workspaces WHERE id = ?`, [wsId]))!.f, null);
+  assert.match(await (await owner.req(`/w/${wsId}/calendar?week=${day}`)).text(), />08:00</);
 });
 
 test('Schüler:in ohne App: nur Name und Instrument, feste Stunden sofort bestätigt, keine E-Mails, später übernehmbar', async () => {

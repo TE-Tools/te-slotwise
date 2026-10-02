@@ -154,6 +154,7 @@ async function slotsView(c: Ctx, v: ViewCtx, membershipId: string | null, userId
       tz,
       items,
       hrefFor: (w) => q({ week: w }),
+      hours: { from: v.ws.cal_from_hour, to: v.ws.cal_to_hour },
       legend: [
         { kind: 'free', label: 'Frei' },
         { kind: 'reluctant', label: 'Nur auf Anfrage (eher ungern)' },
