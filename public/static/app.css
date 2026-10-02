@@ -1396,3 +1396,19 @@ input.money {
 .repeat-week .filters {
   margin: 0;
 }
+.teaching {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.teaching-day {
+  margin: 0;
+}
+.teaching-day h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+.teaching-day .row a {
+  color: var(--text);
+  text-decoration: none;
+}

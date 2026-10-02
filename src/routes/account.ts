@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { html } from 'hono/html';
-import { ROLE_LABELS, safeNextPath } from '../authz.ts';
+import { can, ROLE_LABELS, safeNextPath } from '../authz.ts';
 import { bool, notFound, readForm, requireUser, str, oneOf, type AppEnv, type Ctx, type Deps } from '../context.ts';
 import { getCookie } from 'hono/cookie';
 import { MIN_PASSWORD_LENGTH, passwordProblem, verifyPassword } from '../password.ts';
@@ -14,7 +14,8 @@ import {
   listWorkspacesForUser,
   pendingInvitationsForEmail,
 } from '../services/workspaces.ts';
-import { COMMON_TIME_ZONES, formatDate, formatRange, isValidTimeZone, LocalTimeError, localToUtc } from '../time.ts';
+import { COMMON_TIME_ZONES, formatDate, formatRange, formatTime, isValidTimeZone, localDate, LocalTimeError, localToUtc } from '../time.ts';
+import { calendarEntries, type CalendarEntry } from '../services/calendar.ts';
 import { awaitingLabel, proposalNote } from '../views/booking.ts';
 import { bookingBadge, emptyState, errorBox, flash, maskEmail, options, pageHeader, when, type H } from '../views/ui.ts';
 import { back, render } from './common.ts';
@@ -119,6 +120,35 @@ async function appSection(c: Ctx): Promise<H> {
   </section>`;
 }
 
+/** Unterrichtstermine als Lehrkraft/Anbieter: Buchungen in allen Arbeitsbereichen, die die Person verwaltet. */
+async function teachingEntries(db: Deps['db'], userId: string, fromMs: number, toMs: number) {
+  return (await calendarEntries(db, userId, { fromIso: new Date(fromMs).toISOString(), toIso: new Date(toMs).toISOString() })).filter((e) => e.role === 'provider');
+}
+
+function teachingList(entries: CalendarEntry[], showWorkspace: boolean): H {
+  const byDay = new Map<string, CalendarEntry[]>();
+  for (const e of entries) {
+    const d = localDate(Date.parse(e.starts_at), e.timezone);
+    if (!byDay.has(d)) byDay.set(d, []);
+    byDay.get(d)!.push(e);
+  }
+  return html`<div class="teaching">${[...byDay.entries()].map(
+    ([, list]) => html`<section class="card teaching-day">
+      <h3>${formatDate(Date.parse(list[0].starts_at), list[0].timezone, true)}</h3>
+      <ul class="list">${list.map((e) => {
+        const day = localDate(Date.parse(e.starts_at), e.timezone);
+        return html`<li class="row">
+          <a href="/w/${e.workspace_id}/bookings?from=${day}&to=${day}#b-${e.id}">
+            <strong class="num">${formatTime(Date.parse(e.starts_at), e.timezone)}–${formatTime(Date.parse(e.ends_at), e.timezone)}</strong>
+            · <strong>${e.booker_name || 'Ohne Namen'}</strong> · ${e.offering_name}${showWorkspace ? html` <span class="muted">(${e.workspace_name})</span>` : ''}
+          </a>
+          ${e.status === 'requested' ? html`<span class="badge badge-requested">angefragt – bitte bestätigen</span>` : html`<span class="badge badge-confirmed">bestätigt</span>`}
+        </li>`;
+      })}</ul>
+    </section>`,
+  )}</div>`;
+}
+
 export function registerAccountRoutes(app: Hono<AppEnv>) {
   app.get('/', async (c) => {
     if (c.get('user')) return c.redirect('/dashboard');
@@ -187,6 +217,15 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
       .filter((b) => (b.status === 'requested' || b.status === 'confirmed') && Date.parse(b.ends_at) > now)
       .reverse();
     const needsMe = upcoming.filter((b) => awaiting(b) === 'booker');
+    // Nächste Termine: eigene Buchungen und Unterrichtstermine als Lehrkraft zusammen, nach Zeit sortiert.
+    const teachingNext = workspaces.some((w) => can(w.role, 'bookings.manage')) ? await teachingEntries(db, user.id, now, now + 60 * 86_400_000) : [];
+    const next = [
+      ...upcoming.map((b) => ({ start: b.starts_at, row: html`<li class="row"><span>${when(b.starts_at, b.ends_at, b.timezone)} · ${b.offering_name}</span><span>${bookingBadge(b.status)} ${awaitingLabel(b, 'booker')}</span></li>` })),
+      ...teachingNext.map((e) => ({
+        start: e.starts_at,
+        row: html`<li class="row"><span>${when(e.starts_at, e.ends_at, e.timezone)} · <strong>${e.booker_name || 'Ohne Namen'}</strong> · ${e.offering_name}</span><span>${e.status === 'requested' ? html`<span class="badge badge-requested">angefragt</span>` : html`<span class="badge badge-confirmed">bestätigt</span>`}</span></li>`,
+      })),
+    ].sort((a, b) => a.start.localeCompare(b.start));
     const pushDevices = (await listSubscriptions(db, user.id)).length;
     return render(c, {
       title: 'Übersicht',
@@ -215,10 +254,8 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
             : emptyState('Noch kein Arbeitsbereich', 'Lege einen eigenen Bereich an, um Termine anzubieten – oder nimm eine Einladung an, um bei anderen zu buchen.', html`<a class="btn" href="/workspaces/new">Arbeitsbereich anlegen</a>`)}
         </section>`,
         html`<section class="card"><h2>Nächste Termine</h2>
-          ${upcoming.length
-            ? html`<ul class="list">${upcoming.slice(0, 5).map(
-                (b) => html`<li class="row"><span>${when(b.starts_at, b.ends_at, b.timezone)} · ${b.offering_name}</span><span>${bookingBadge(b.status)} ${awaitingLabel(b, 'booker')}</span></li>`,
-              )}</ul><p><a href="/bookings">Alle eigenen Termine</a></p>`
+          ${next.length
+            ? html`<ul class="list">${next.slice(0, 8).map((x) => x.row)}</ul><p><a href="/bookings">Alle Termine</a></p>`
             : emptyState('Keine anstehenden Termine', 'Gebuchte und angefragte Termine erscheinen hier.')}
         </section>`,
       ],
@@ -404,12 +441,24 @@ export function registerAccountRoutes(app: Hono<AppEnv>) {
     const upcoming = all.filter((b) => Date.parse(b.ends_at) > now && (b.status === 'requested' || b.status === 'confirmed')).reverse();
     const alts = await alternativesFor(c.get('deps').db, user.id, upcoming);
     const rest = all.filter((b) => !upcoming.includes(b));
+    // Als Lehrkraft: alle kommenden Termine der eigenen Arbeitsbereiche.
+    const managed = (await listWorkspacesForUser(c.get('deps').db, user.id)).filter((w) => can(w.role, 'bookings.manage'));
+    const teaching = managed.length ? await teachingEntries(c.get('deps').db, user.id, now, now + 120 * 86_400_000) : [];
+    const requested = teaching.filter((e) => e.status === 'requested').length;
     return render(c, {
       title: 'Meine Termine',
       body: [
         flash(c.req.query('msg')),
-        pageHeader('Meine Termine', 'Nur du siehst diese Übersicht.'),
-        html`<h2>Anstehend</h2>${upcoming.length ? html`<ul class="cards">${upcoming.map((b) => bookingCard(b, now, alts.get(b.id)))}</ul>` : emptyState('Keine anstehenden Termine', 'Buche über einen Arbeitsbereich oder einen geteilten Link.')}`,
+        pageHeader('Meine Termine', 'Nur du siehst diese Übersicht.', managed.length ? html`<a class="btn btn-secondary" href="/profile#kalender">In meinen Kalender übernehmen</a>` : undefined),
+        managed.length
+          ? html`<h2>Meine Unterrichtstermine</h2>
+              <p class="muted">Kommende Termine in ${managed.length === 1 ? `„${managed[0].name}“` : 'deinen Arbeitsbereichen'} (nächste 4 Monate)${requested ? html` – <strong>${requested} ${requested === 1 ? 'Anfrage wartet' : 'Anfragen warten'} auf deine Bestätigung</strong>` : ''}.
+                ${managed.map((w) => html` <a href="/w/${w.id}/calendar">Wochenkalender${managed.length > 1 ? ` ${w.name}` : ''}</a>`)}</p>
+              ${teaching.length ? teachingList(teaching, managed.length > 1) : emptyState('Keine kommenden Unterrichtstermine', 'Sobald Schüler:innen buchen oder du Termine einträgst, erscheinen sie hier.')}`
+          : '',
+        managed.length && !upcoming.length && !rest.length
+          ? ''
+          : html`<h2>${managed.length ? 'Selbst gebuchte Termine' : 'Anstehend'}</h2>${upcoming.length ? html`<ul class="cards">${upcoming.map((b) => bookingCard(b, now, alts.get(b.id)))}</ul>` : emptyState('Keine anstehenden Termine', 'Buche über einen Arbeitsbereich oder einen geteilten Link.')}`,
         rest.length ? html`<h2>Vergangen, abgesagt, abgelehnt</h2><ul class="cards">${rest.slice(0, 100).map((b) => bookingCard(b, now))}</ul>` : '',
       ],
     });
