@@ -266,8 +266,10 @@
         preview.textContent = 'Die Zeitspanne ist kürzer als ein Termin (' + dur + ' Min.). Bitte „Bis“ später wählen.';
         return;
       }
+      var kind = (slotForm.querySelector('input[name="kind"]:checked') || {}).value || 'fixed';
       var times = [];
-      for (var t = s; t + dur <= e; t += dur + buf) times.push(hhmm(t));
+      if (kind === 'window') times.push(hhmm(s));
+      else for (var t = s; t + dur <= e; t += dur + buf) times.push(hhmm(t));
       var dates = [];
       if (rep === 'once') dates.push(from);
       else {
@@ -290,6 +292,13 @@
         var name = DAYS[isoWd(d) - 1];
         if (dayNames.indexOf(name) < 0) dayNames.push(name);
       });
+      if (kind === 'window') {
+        preview.textContent =
+          'Ergibt ' + n + (n === 1 ? ' freies Zeitfenster' : ' freie Zeitfenster') + ' ' + hhmm(s) + '–' + hhmm(e) + ' Uhr' +
+          (dates.length > 1 ? ', ' + dayNames.join(' + ') + ' vom ' + fmt(dates[0]) + ' bis ' + fmt(dates[dates.length - 1]) : ' am ' + fmt(dates[0] || from)) +
+          '. Schüler:innen wählen darin ihre Startzeit (je ' + dur + ' Min.).';
+        return;
+      }
       preview.textContent =
         'Ergibt ' + n + (n === 1 ? ' Termin' : ' Termine') + ': ' +
         (times.length > 4 ? times.length + ' pro Tag ab ' + times[0] : times.join(', ')) + ' Uhr (je ' + dur + ' Min.)' +

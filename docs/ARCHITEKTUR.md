@@ -9,7 +9,7 @@ Enthalten:
 - Einladungen per E-Mail (Bereich, Gruppe oder Angebot), erneut senden, widerrufen, 7 Tage gültig
 - Gruppen mit frei wählbaren Namen
 - Angebote mit Dauer, Puffer, Ort, Online-Info, Plätzen und Buchungsregeln
-- Slots: **feste, vorgegebene Termine** über ein einfaches Formular (Datum, optional „bis“ + Wochentage, Uhrzeit von–bis → automatisch in Termine der Angebotsdauer aufgeteilt) oder per Klick auf eine Uhrzeit im Wochenkalender. Buchende können nur diese Termine buchen. (Freie Zeitfenster mit Wunschzeit sind technisch noch vorhanden, werden aber nicht mehr angeboten.)
+- Slots: **feste, vorgegebene Termine** über ein einfaches Formular (Datum, optional „bis“ + Wochentage, Uhrzeit von–bis → automatisch in Termine der Angebotsdauer aufgeteilt) oder per Klick auf eine Uhrzeit im Wochenkalender. Alternativ **freie Zeitfenster** (von–bis): Buchende wählen darin ihre Startzeit aus den noch freien Zeiten (15-Minuten-Raster). Beides einmalig, jede Woche oder alle 2 Wochen; im Kalender lässt sich eine Woche mit „Woche wiederholen“ in die folgenden Wochen übernehmen.
 - Sichtbarkeit pro Angebot oder Slot: öffentlich, ausgewählte Gruppen/Personen, intern
 - Buchung mit manueller oder automatischer Bestätigung, Schutz gegen Doppelbuchung
 - **Verschieben mit Gegenbestätigung**: Jede Seite kann eine andere Zeit vorschlagen; fix ist ein Termin erst, wenn beide zugestimmt haben

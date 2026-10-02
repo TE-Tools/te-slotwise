@@ -53,3 +53,15 @@ test('Woche wiederholen: Slots der Woche in die nächsten Wochen, ohne Doppelte'
   // Erneut ausführen erzeugt nichts Doppeltes.
   assert.equal((await repeatWeek(db, wsId, mon, 'Europe/Berlin', 3)).created, 0);
 });
+
+test('Woche wiederholen übernimmt auch freie Zeitfenster', async () => {
+  const db = await freshDb();
+  const { owner, wsId, offeringId } = await setupWorkspace(db, { duration_min: 45 });
+  const off = (await getOffering(db, wsId, offeringId))!;
+  const mon = nextMonday();
+  await createSeries(db, wsId, owner.id, off, 'Europe/Berlin', { fromDate: mon, toDate: mon, weekdays: [1], windowStart: '16:00', windowEnd: '19:30' }, { ...base, kind: 'window', durationMin: 45 });
+  const r = await repeatWeek(db, wsId, mon, 'Europe/Berlin', 2);
+  assert.equal(r.created, 2);
+  const kinds = await db.all<{ kind: string; n: number }>(`SELECT kind, COUNT(*) AS n FROM slots GROUP BY kind`);
+  assert.deepEqual(kinds.map((k) => ({ ...k })), [{ kind: 'window', n: 3 }]);
+});
