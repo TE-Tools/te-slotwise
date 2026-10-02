@@ -789,3 +789,12 @@ test('Schüler:in ohne App: nur Name und Instrument, feste Stunden sofort bestä
   // Danach ist es ein normales Konto – nicht mehr als „ohne App“ änderbar.
   assert.equal((await owner.req(`/w/${wsId}/students/${pid}/offline`, { method: 'POST', form: { first_name: 'X', email: '' } })).status, 404);
 });
+
+test('Impressum: mehrzeiliger Betreibername mit vollem Namen', async () => {
+  const db = await freshDb();
+  const mailer = new MemoryMailer();
+  const config = loadConfig({ APP_URL: ORIGIN, OPERATOR_NAME: 'TE-Digital (vormals TE-Alltagshelfer)|Inhaber: Thomas Elsen', OPERATOR_ADDRESS: 'Holbeinstraße 6, 41470 Neuss' });
+  const app = createApp(() => ({ db, config, mailer, push: new MemoryPushSender(), limiter: new RateLimiter(), kick: () => {} }));
+  const page = await (await client(app).req('/impressum')).text();
+  assert.match(page, /TE-Digital \(vormals TE-Alltagshelfer\)<br>Inhaber: Thomas Elsen<br>Holbeinstraße 6, 41470 Neuss/);
+});
