@@ -21,6 +21,7 @@ import { getAudience, getOffering, listOfferings, saveOffering, setArchived, typ
 import {
   bulkSlots,
   createSeries,
+  repeatWeek,
   createSlot,
   getSlot,
   listSlotsAdmin,
@@ -635,6 +636,31 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
           { kind: 'blocked', label: 'Gesperrt (kein Slot)' },
         ],
       }),
+      can(ws.role, 'slots.manage')
+        ? html`<section class="card repeat-week"><h2>Woche wiederholen</h2>
+            ${(() => {
+              const n = slots.filter((sl) => sl.kind === 'fixed' && sl.status !== 'closed' && Date.parse(sl.starts_at) >= Date.parse(fromIso)).length;
+              return n
+                ? html`<p>Diese Woche hat <strong>${n === 1 ? 'einen Slot' : `${n} Slots`}</strong>. Übernimm sie mit gleichen Uhrzeiten in die nächsten Wochen – ohne Buchungen, vorhandene Slots bleiben unberührt.</p>
+                    <form method="post" action="/w/${ws.id}/slots/repeat-week" class="filters">
+                      <input type="hidden" name="week" value="${weekStart}">
+                      <label>Für <select name="weeks">${options(
+                        [1, 2, 3, 4, 6, 8, 12, 16, 26].map((w) => ({ value: String(w), label: w === 1 ? 'die nächste Woche' : `die nächsten ${w} Wochen` })),
+                        '4',
+                      )}</select></label>
+                      <label>Rhythmus <select name="every">${options(
+                        [
+                          { value: '1', label: 'jede Woche' },
+                          { value: '2', label: 'alle 2 Wochen' },
+                        ],
+                        '1',
+                      )}</select></label>
+                      <button class="btn" type="submit">Woche übernehmen</button>
+                    </form>`
+                : html`<p class="muted">In dieser Woche gibt es noch keine Slots. Klicke im Kalender auf eine Uhrzeit oder <a href="/w/${ws.id}/slots/new?date=${weekStart}">lege Slots an</a> – danach kannst du die Woche hier für die folgenden Wochen übernehmen.</p>`;
+            })()}
+          </section>`
+        : '',
     ]);
   });
 
@@ -817,7 +843,10 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     };
   }
 
-  /** Ein einziges, einfaches Formular: Zeitraum + Uhrzeit von–bis, wird in Termine des Angebots aufgeteilt. */
+  /**
+   * Einfaches Formular: Tag, Uhrzeit von–bis (wird in Termine der Angebotsdauer aufgeteilt) und
+   * Wiederholung (einmalig, jede Woche, alle 2 Wochen) für eine wählbare Dauer.
+   */
   const newSlotsPage = async (c: Ctx, ws: WsContext, error?: string) => {
     const { db } = c.get('deps');
     const offerings = await listOfferings(db, ws.id);
@@ -834,22 +863,48 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     const toMin = Math.min(fromMin + Math.max(off.duration_min + off.buffer_min, 60), 23 * 60 + 55);
     const to = `${String(Math.floor(toMin / 60)).padStart(2, '0')}:${String(toMin % 60).padStart(2, '0')}`;
     const weekday = isoWeekday(date);
+    const repeat = oneOf(c.req.query('repeat') ?? '', ['once', 'weekly', 'biweekly'] as const, 'weekly');
     const common = slotCommonFields(c, ws, { capacity: off.default_capacity, location: null, online: null, mode: '', visibility: 'inherit', status: 'published', buffer: off.buffer_min, preference: 'normal' }, { groupIds: [], membershipIds: [] });
+    const offeringField =
+      offerings.length === 1
+        ? html`<input type="hidden" name="offering_id" value="${off.id}" data-duration="${off.duration_min}" data-buffer="${off.buffer_min}"><p class="span-all"><strong>${off.name}</strong> <span class="muted">· ${durationLabel(off.duration_min)} pro Termin${off.buffer_min ? ` + ${off.buffer_min} Min. Pause` : ''}</span></p>`
+        : html`<label class="span-all">Angebot <select name="offering_id">${offerings.map(
+            (o) => html`<option value="${o.id}" data-duration="${o.duration_min}" data-buffer="${o.buffer_min}" ${o.id === off.id ? raw('selected') : ''}>${o.name} (${durationLabel(o.duration_min)}${o.buffer_min ? ` + ${o.buffer_min} Min. Pause` : ''})</option>`,
+          )}</select></label>`;
     return page(c, ws, 'slots', 'Slots anlegen', [
       errorBox(error),
-      pageHeader('Slots anlegen', `Zeiten in ${ws.timezone}. Kunden können nur diese Termine buchen.`),
-      html`<section class="card"><form method="post" action="/w/${ws.id}/slots/series" class="stack">
+      pageHeader('Slots anlegen', `Zeiten in ${ws.timezone}. Schüler:innen können nur diese Termine buchen.`, html`<a class="btn btn-secondary" href="/w/${ws.id}/calendar">Zum Kalender</a>`),
+      html`<section class="card"><form method="post" action="/w/${ws.id}/slots/series" class="stack" data-slot-form>
         <div class="grid-form">
-          <label class="span-all">Angebot <select name="offering_id">${options(offerings.map((o) => ({ value: o.id, label: `${o.name} (${durationLabel(o.duration_min)}${o.buffer_min ? ` + ${o.buffer_min} Min. Pause` : ''})` })), off.id)}</select></label>
-          <label>Am (bzw. ab) <input type="date" name="from" required value="${date}"></label>
-          <label>Bis (optional, für mehrere Wochen) <input type="date" name="to" min="${date}"></label>
-          <label>Uhrzeit von <input type="time" name="window_start" required step="300" value="${from}"></label>
-          <label>bis <input type="time" name="window_end" required step="300" value="${to}"></label>
+          ${offeringField}
+          <label>Tag <input type="date" name="from" required value="${date}" data-weekday-source></label>
+          <label>Von <input type="time" name="window_start" required step="300" value="${from}"></label>
+          <label>Bis <input type="time" name="window_end" required step="300" value="${to}"></label>
         </div>
-        <fieldset class="field weekdays"><legend>An diesen Wochentagen (nur wenn „Bis“ gesetzt)</legend>
-          ${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map((d, i) => html`<label class="check"><input type="checkbox" name="weekday" value="${i + 1}" ${checked(i + 1 === weekday)}> ${d}</label>`)}
+        <fieldset class="field repeat-choice"><legend>Wiederholen</legend>
+          <div class="segmented-radio">
+            <label><input type="radio" name="repeat" value="once" ${checked(repeat === 'once')}> Einmalig</label>
+            <label><input type="radio" name="repeat" value="weekly" ${checked(repeat === 'weekly')}> Jede Woche</label>
+            <label><input type="radio" name="repeat" value="biweekly" ${checked(repeat === 'biweekly')}> Alle 2 Wochen</label>
+          </div>
         </fieldset>
-        <p class="hint">Der Zeitraum wird automatisch in Termine mit der Dauer des Angebots aufgeteilt, z. B. 16:00–18:00 bei 60 Min. → 16:00 und 17:00. Überschneidungen mit vorhandenen Slots werden übersprungen.</p>
+        <div class="grid-form" data-repeat-only>
+          <label>Wie lange? <select name="weeks">${options(
+            [
+              { value: '4', label: '4 Wochen' },
+              { value: '8', label: '8 Wochen' },
+              { value: '12', label: '12 Wochen (ca. 3 Monate)' },
+              { value: '26', label: '26 Wochen (ca. ½ Jahr)' },
+              { value: '52', label: '52 Wochen (1 Jahr)' },
+            ],
+            '12',
+          )}</select></label>
+          <label>… oder bis Datum (optional) <input type="date" name="until" min="${date}"></label>
+          <fieldset class="field weekdays span-all"><legend>An diesen Wochentagen</legend>
+            ${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map((d, i) => html`<label class="check"><input type="checkbox" name="weekday" value="${i + 1}" ${checked(i + 1 === weekday)} data-weekday="${i + 1}"> ${d}</label>`)}
+          </fieldset>
+        </div>
+        <p class="slot-preview" data-slot-preview aria-live="polite">Der Zeitraum wird automatisch in Termine mit der Dauer des Angebots aufgeteilt, z. B. 16:00–18:00 bei 60 Min. → 16:00 und 17:00. Überschneidungen mit vorhandenen Slots werden übersprungen.</p>
         <details class="advanced"><summary>Weitere Einstellungen (Plätze, Ort, Farbe, Sichtbarkeit …)</summary>
           <div class="stack">
             <label>Abweichende Dauer je Termin (Min., leer = wie Angebot) <input type="number" name="duration" min="5" max="1440" step="5" placeholder="${off.duration_min}"></label>
@@ -858,6 +913,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
         </details>
         <button class="btn btn-large" type="submit">Slots anlegen</button>
       </form></section>`,
+      html`<p class="hint">Tipp: Eine fertig eingerichtete Woche kannst du im <a href="/w/${ws.id}/calendar">Kalender</a> mit „Woche wiederholen“ für die nächsten Wochen übernehmen.</p>`,
     ]);
   };
 
@@ -897,11 +953,19 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
     if (!off || off.archived_at) notFound();
     const kind = oneOf(str(f, 'kind'), ['fixed', 'window'] as const, 'fixed');
     const from = str(f, 'from', 10);
-    const single = !str(f, 'to', 10);
-    const to = single ? from : str(f, 'to', 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return newSlotsPage(c, ws, 'Bitte ein Datum angeben.');
-    let weekdays = list(f, 'weekday').map(Number).filter((n) => n >= 1 && n <= 7);
-    if (single) weekdays = [isoWeekday(from)];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return newSlotsPage(c, ws, 'Bitte einen Tag angeben.');
+    // Ältere Formulare schicken statt „repeat“ ein Enddatum „to“.
+    const legacyTo = str(f, 'to', 10);
+    const repeat = oneOf(str(f, 'repeat'), ['once', 'weekly', 'biweekly'] as const, legacyTo ? 'weekly' : 'once');
+    let to = from;
+    let weekdays = [isoWeekday(from)];
+    if (repeat !== 'once') {
+      const until = str(f, 'until', 10) || legacyTo;
+      to = /^\d{4}-\d{2}-\d{2}$/.test(until) ? until : addDays(from, int(f, 'weeks', 1, 52, 12) * 7 - 1);
+      // Der Wochentag des gewählten Tages ist immer dabei, weitere sind optional.
+      weekdays = [...new Set([...(legacyTo ? [] : [isoWeekday(from)]), ...list(f, 'weekday').map(Number).filter((n) => n >= 1 && n <= 7)])];
+      if (!weekdays.length) weekdays = [isoWeekday(from)];
+    }
     try {
       const r = await createSeries(
         db,
@@ -915,13 +979,29 @@ export function registerAdminRoutes(app: Hono<AppEnv>) {
           weekdays,
           windowStart: str(f, 'window_start', 5),
           windowEnd: str(f, 'window_end', 5),
+          everyWeeks: repeat === 'biweekly' ? 2 : 1,
         },
         readSlotInput(f, off, kind, int(f, 'duration', 5, 1440, off.duration_min)),
       );
-      if (!r.created) return newSlotsPage(c, ws, r.skipped ? 'Keine neuen Slots: Alle Zeiten überschneiden sich mit vorhandenen Slots.' : 'Keine Slots angelegt – passt das Zeitfenster zur Dauer und sind Wochentage gewählt?');
+      if (!r.created) return newSlotsPage(c, ws, r.skipped ? 'Keine neuen Slots: Alle Zeiten überschneiden sich mit vorhandenen Slots.' : 'Keine Slots angelegt – ist die Zeitspanne mindestens so lang wie ein Termin?');
       return c.redirect(`/w/${ws.id}/calendar?week=${from}&msg=slots_created&n=${r.created}&k=${r.skipped}`, 303);
     } catch (e) {
       if (e instanceof SlotError || e instanceof LocalTimeError) return newSlotsPage(c, ws, e.message);
+      throw e;
+    }
+  });
+
+  // „Woche wiederholen“ aus dem Kalender: alle Slots der angezeigten Woche in die nächsten Wochen übernehmen.
+  app.post('/w/:wid/slots/repeat-week', async (c) => {
+    const { ws } = await requireWs(c, 'slots.manage');
+    const f = await readForm(c);
+    const week = parseWeek(str(f, 'week', 10), localDate(Date.now(), ws.timezone));
+    try {
+      const r = await repeatWeek(c.get('deps').db, ws.id, week, ws.timezone, int(f, 'weeks', 1, 52, 4), str(f, 'every') === '2' ? 2 : 1);
+      if (!r.source) return c.redirect(`/w/${ws.id}/calendar?week=${week}&msg=week_empty`, 303);
+      return c.redirect(`/w/${ws.id}/calendar?week=${addDays(week, 7)}&msg=week_repeated&n=${r.created}&k=${r.skipped}`, 303);
+    } catch (e) {
+      if (e instanceof SlotError) return c.redirect(`/w/${ws.id}/calendar?week=${week}&msg=week_too_many`, 303);
       throw e;
     }
   });

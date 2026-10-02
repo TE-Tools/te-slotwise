@@ -1,8 +1,8 @@
 import { SLOT_VISIBLE_SQL, type Visibility } from '../authz.ts';
 import type { Db } from '../db.ts';
 import { newId, nowIso } from '../ids.ts';
-import { addDays, isoWeekday, LocalTimeError, localToUtc } from '../time.ts';
-import { setAudience, type Audience, type Offering } from './offerings.ts';
+import { addDays, isoWeekday, localDate, localTime, LocalTimeError, localToUtc } from '../time.ts';
+import { getAudience, setAudience, type Audience, type Offering } from './offerings.ts';
 
 export type SlotStatus = 'draft' | 'published' | 'closed';
 export type SlotVisibility = Visibility | 'inherit';
@@ -147,7 +147,12 @@ export interface SeriesInput {
   weekdays: number[]; // 1 = Montag … 7 = Sonntag
   windowStart: string; // HH:MM
   windowEnd: string; // HH:MM
+  /** 1 = jede Woche (Standard), 2 = alle zwei Wochen … (gezählt ab der Woche des Startdatums) */
+  everyWeeks?: number;
 }
+
+/** Tage zwischen zwei Daten (YYYY-MM-DD). */
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 
 export const MAX_SERIES_SLOTS = 500;
 
@@ -172,10 +177,13 @@ export async function createSeries(db: Db, wsId: string, userId: string, offerin
   const step = p.kind === 'window' ? Number.POSITIVE_INFINITY : p.durationMin + p.bufferMin;
   if (p.kind === 'window') p = { ...p, durationMin: winEnd - winStart };
 
+  const every = Math.max(1, Math.min(8, Math.floor(s.everyWeeks ?? 1)));
+  const firstMonday = addDays(s.fromDate, 1 - isoWeekday(s.fromDate));
   const planned: { date: string; time: string }[] = [];
   for (let date = s.fromDate, i = 0; date <= s.toDate; date = addDays(date, 1), i++) {
     if (i > 366) throw new SlotError('Der Zeitraum darf höchstens ein Jahr umfassen.');
     if (!s.weekdays.includes(isoWeekday(date))) continue;
+    if (Math.floor(daysBetween(firstMonday, date) / 7) % every !== 0) continue;
     for (let t = winStart; t + p.durationMin <= winEnd; t += step) planned.push({ date, time: fromMinutes(t) });
   }
   if (planned.length > MAX_SERIES_SLOTS) throw new SlotError(`Das wären ${planned.length} Slots – höchstens ${MAX_SERIES_SLOTS} auf einmal.`);
@@ -418,4 +426,70 @@ export async function occupiedTimes(db: Db, wsId: string, membershipId: string |
      ORDER BY b.starts_at LIMIT 1000`,
     { ws: wsId, mid: membershipId, uid: userId ?? '', from: fromIso, to: toIso },
   );
+}
+
+/**
+ * „Woche wiederholen“: Alle Slots einer Woche (ab Montag `weekStart`) werden in die folgenden Wochen
+ * übernommen – gleiche Uhrzeit (Ortszeit), gleiche Einstellungen, ohne Buchungen. Geschlossene Slots
+ * (z. B. einzeln eingetragene Stunden) und Zeitfenster bleiben außen vor; Überschneidungen werden übersprungen.
+ */
+export async function repeatWeek(db: Db, wsId: string, weekStart: string, tz: string, weeks: number, everyWeeks = 1) {
+  weeks = Math.max(1, Math.min(52, Math.floor(weeks)));
+  everyWeeks = Math.max(1, Math.min(4, Math.floor(everyWeeks)));
+  const from = new Date(localToUtc(weekStart, '00:00', tz)).toISOString();
+  const to = new Date(localToUtc(addDays(weekStart, 7), '00:00', tz)).toISOString();
+  const source = await db.all<Slot>(
+    `SELECT * FROM slots WHERE workspace_id = ? AND starts_at >= ? AND starts_at < ? AND kind = 'fixed' AND status <> 'closed' ORDER BY starts_at`,
+    [wsId, from, to],
+  );
+  if (weeks * source.length > MAX_SERIES_SLOTS) throw new SlotError(`Das wären ${weeks * source.length} Slots – höchstens ${MAX_SERIES_SLOTS} auf einmal.`);
+  const offerings = new Map<string, Offering>();
+  let created = 0;
+  let skipped = 0;
+  await db.tx(async () => {
+    for (const sl of source) {
+      if (!offerings.has(sl.offering_id)) {
+        const o = await db.get<Offering>(`SELECT * FROM offerings WHERE id = ? AND workspace_id = ?`, [sl.offering_id, wsId]);
+        if (o) offerings.set(o.id, o);
+      }
+      const off = offerings.get(sl.offering_id);
+      if (!off || off.archived_at) continue;
+      const startMs = Date.parse(sl.starts_at);
+      const duration = Math.round((Date.parse(sl.ends_at) - startMs) / 60_000);
+      const day = localDate(startMs, sl.timezone);
+      const time = localTime(startMs, sl.timezone);
+      const audience = sl.visibility === 'groups' || sl.visibility === 'people' ? await getAudience(db, 'slot', wsId, sl.id) : { groupIds: [], membershipIds: [] };
+      for (let k = 1; k <= weeks; k++) {
+        let start: number;
+        try {
+          start = localToUtc(addDays(day, 7 * everyWeeks * k), time, sl.timezone);
+        } catch (e) {
+          if (e instanceof LocalTimeError) {
+            skipped++;
+            continue;
+          }
+          throw e;
+        }
+        if (await overlaps(db, wsId, off.id, start, start + duration * 60_000, sl.buffer_min, null)) {
+          skipped++;
+          continue;
+        }
+        await insertSlot(db, wsId, off, sl.series_id, start, sl.timezone, {
+          kind: 'fixed',
+          durationMin: duration,
+          bufferMin: sl.buffer_min,
+          capacity: sl.capacity,
+          location: sl.location,
+          onlineInfo: sl.online_info,
+          confirmationMode: sl.confirmation_mode,
+          status: sl.status,
+          preference: sl.preference,
+          visibility: sl.visibility,
+          audience,
+        });
+        created++;
+      }
+    }
+  });
+  return { source: source.length, created, skipped };
 }

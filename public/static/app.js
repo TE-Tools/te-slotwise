@@ -209,4 +209,95 @@
         });
     }
   }
+  // ---------- Slots anlegen: Wiederholung und Vorschau ----------
+  var slotForm = document.querySelector('form[data-slot-form]');
+  if (slotForm) {
+    var el = function (n) {
+      return slotForm.querySelector('[name="' + n + '"]');
+    };
+    var repeatBox = slotForm.querySelector('[data-repeat-only]');
+    var preview = slotForm.querySelector('[data-slot-preview]');
+    var DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+    var mins = function (v) {
+      var m = /^(\d{2}):(\d{2})$/.exec(v || '');
+      return m ? +m[1] * 60 + +m[2] : null;
+    };
+    var hhmm = function (m) {
+      return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+    };
+    var isoWd = function (d) {
+      var w = d.getUTCDay();
+      return w === 0 ? 7 : w;
+    };
+    var parse = function (v) {
+      return /^\d{4}-\d{2}-\d{2}$/.test(v || '') ? new Date(v + 'T00:00:00Z') : null;
+    };
+    var fmt = function (d) {
+      return String(d.getUTCDate()).padStart(2, '0') + '.' + String(d.getUTCMonth() + 1).padStart(2, '0') + '.' + d.getUTCFullYear();
+    };
+    var lastWd = null;
+    var update = function () {
+      var rep = (slotForm.querySelector('input[name="repeat"]:checked') || {}).value || 'once';
+      if (repeatBox) repeatBox.hidden = rep === 'once';
+      var from = parse(el('from').value);
+      // Wochentag des gewählten Tages automatisch mitwählen.
+      if (from) {
+        var wd = isoWd(from);
+        if (wd !== lastWd) {
+          if (lastWd) {
+            var old = slotForm.querySelector('[data-weekday="' + lastWd + '"]');
+            if (old) old.checked = false;
+          }
+          var cur = slotForm.querySelector('[data-weekday="' + wd + '"]');
+          if (cur) cur.checked = true;
+          lastWd = wd;
+        }
+      }
+      var offEl = el('offering_id');
+      var opt = offEl && offEl.tagName === 'SELECT' ? offEl.options[offEl.selectedIndex] : offEl;
+      var custom = parseInt((el('duration') || {}).value, 10);
+      var dur = custom > 0 ? custom : parseInt(opt && opt.getAttribute('data-duration'), 10);
+      var buf = parseInt((el('buffer_min') || {}).value, 10);
+      if (!(buf >= 0)) buf = parseInt(opt && opt.getAttribute('data-buffer'), 10) || 0;
+      var s = mins(el('window_start').value);
+      var e = mins(el('window_end').value);
+      if (!from || s === null || e === null || !dur) return;
+      if (e - s < dur) {
+        preview.textContent = 'Die Zeitspanne ist kürzer als ein Termin (' + dur + ' Min.). Bitte „Bis“ später wählen.';
+        return;
+      }
+      var times = [];
+      for (var t = s; t + dur <= e; t += dur + buf) times.push(hhmm(t));
+      var dates = [];
+      if (rep === 'once') dates.push(from);
+      else {
+        var every = rep === 'biweekly' ? 2 : 1;
+        var until = parse(el('until').value);
+        var end = until || new Date(from.getTime() + (parseInt(el('weeks').value, 10) * 7 - 1) * 86400000);
+        var wds = Array.prototype.map.call(slotForm.querySelectorAll('input[name="weekday"]:checked'), function (c) {
+          return +c.value;
+        });
+        if (wds.indexOf(isoWd(from)) < 0) wds.push(isoWd(from));
+        var monday = new Date(from.getTime() - (isoWd(from) - 1) * 86400000);
+        for (var d = new Date(from); d <= end && dates.length < 600; d = new Date(d.getTime() + 86400000)) {
+          var week = Math.floor((d - monday) / (7 * 86400000));
+          if (wds.indexOf(isoWd(d)) >= 0 && week % every === 0) dates.push(d);
+        }
+      }
+      var n = dates.length * times.length;
+      var dayNames = [];
+      dates.forEach(function (d) {
+        var name = DAYS[isoWd(d) - 1];
+        if (dayNames.indexOf(name) < 0) dayNames.push(name);
+      });
+      preview.textContent =
+        'Ergibt ' + n + (n === 1 ? ' Termin' : ' Termine') + ': ' +
+        (times.length > 4 ? times.length + ' pro Tag ab ' + times[0] : times.join(', ')) + ' Uhr (je ' + dur + ' Min.)' +
+        (dates.length > 1 ? ', ' + dayNames.join(' + ') + ' vom ' + fmt(dates[0]) + ' bis ' + fmt(dates[dates.length - 1]) : ' am ' + fmt(dates[0] || from)) +
+        '. Vorhandene Slots werden übersprungen.';
+    };
+    slotForm.addEventListener('input', update);
+    slotForm.addEventListener('change', update);
+    update();
+  }
 })();
